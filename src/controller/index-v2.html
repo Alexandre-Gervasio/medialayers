@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; media-src 'self' blob: mediastream:; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>MediaLayers — Controle Grid</title>
+  <link rel="stylesheet" href="style-v2.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!--  HEADER                                 -->
+  <!-- ═══════════════════════════════════════ -->
+  <header>
+    <div class="header-left">
+      <span class="logo">🎬 MediaLayers</span>
+      <span class="version">v2.0 - GRID</span>
+    </div>
+    <div class="header-controls">
+      <input type="number" id="grid-rows" value="4" min="1" max="12" placeholder="Linhas">
+      <span>×</span>
+      <input type="number" id="grid-cols" value="6" min="1" max="12" placeholder="Colunas">
+      <button class="btn btn-primary" id="btn-update-grid">Atualizar Grid</button>
+      <button class="btn btn-danger" id="btn-clear-all">Limpar Tudo</button>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!--  WORKSPACE: 3 PAINÉIS                  -->
+  <!-- ═══════════════════════════════════════ -->
+  <div class="workspace">
+
+    <!-- ┌─ PAINEL ESQUERDO: Editor de Célula ─┐ -->
+    <aside class="panel panel-left">
+      <div class="panel-header">
+        <h2>📍 Célula Selecionada</h2>
+      </div>
+
+      <div class="cell-info">
+        <div class="info-display">
+          <span id="cell-coords">Nenhuma célula selecionada</span>
+        </div>
+      </div>
+
+      <!-- Layers da célula -->
+      <div class="panel-header" style="margin-top: 10px;">
+        <h3>Camadas</h3>
+        <button class="btn btn-sm" id="btn-add-layer" title="Adicionar camada">➕</button>
+      </div>
+
+      <div id="layers-panel" class="layers-panel">
+        <!-- Layers renderizadas aqui -->
+      </div>
+
+      <!-- Toolbar de mídia -->
+      <div class="media-toolbar">
+        <button class="btn btn-sm" id="btn-add-video" title="Vídeo">🎥</button>
+        <button class="btn btn-sm" id="btn-add-image" title="Imagem">🖼</button>
+        <button class="btn btn-sm" id="btn-add-audio" title="Áudio">🔊</button>
+        <button class="btn btn-sm" id="btn-add-text" title="Texto">📝</button>
+        <button class="btn btn-sm" id="btn-add-camera" title="Câmera">📷</button>
+      </div>
+    </aside>
+
+    <!-- ┌─ PAINEL CENTRAL: GRID + PREVIEW ─┐ -->
+    <main class="panel panel-center">
+      <!-- TAB 1: Grid de Shots -->
+      <div class="tabs-header">
+        <button class="tab-btn active" data-tab="grid-view">📊 Grid</button>
+        <button class="tab-btn" data-tab="preview-view">👁 Preview</button>
+      </div>
+
+      <!-- Grid de Células (com scroll obrigatório) -->
+      <div id="grid-view" class="tab-content active">
+        <div id="clips-grid" class="clips-grid">
+          <!-- Células renderizadas aqui -->
+        </div>
+      </div>
+
+      <!-- Preview da célula ativa (em tempo real) -->
+      <div id="preview-view" class="tab-content">
+        <div class="preview-container">
+          <canvas id="preview-canvas" width="1280" height="720"></canvas>
+          <div class="preview-controls">
+            <button class="btn btn-sm" id="btn-play-preview">▶ Play</button>
+            <button class="btn btn-sm" id="btn-stop-preview">⏹ Stop</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ┌─ PAINEL DIREITO: Propriedades ─┐ -->
+    <aside class="panel panel-right">
+      <div class="panel-header">
+        <h2>⚙️ Propriedades</h2>
+      </div>
+
+      <div id="properties-panel" class="properties-panel">
+        <!-- Props da layer selecionada renderizadas aqui -->
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Inputs de arquivo (ocultos) -->
+  <input type="file" id="file-video" accept="video/*" style="display:none">
+  <input type="file" id="file-image" accept="image/*" style="display:none">
+  <input type="file" id="file-audio" accept="audio/*" style="display:none">
+
+  <!-- Scripts -->
+  <script src="app-grid-v2.js"></script>
+  <script src="ndi-controller.js"></script>
+  <script src="../stream/stream-controller.js"></script>
+  <script src="../extensions/letras/letras-extension.js"></script>
+  <script src="../extensions/biblia/biblia-extension.js"></script>
+</body>
+</html>
