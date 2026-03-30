@@ -460,3 +460,124 @@ header {
 .clips-grid {
   scrollbar-width: thin;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   FASE 2: MONITORES DE SAÍDA (Preview + Program)
+═══════════════════════════════════════════════════════════ */
+
+.output-monitors-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.monitor-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.monitor-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+
+.monitor-label.live {
+  color: #ff0000;
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.monitor-canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16/9;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: #000;
+  image-rendering: crisp-edges;
+  display: block;
+}
+
+.monitor-info {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 4px;
+  text-align: center;
+  font-family: 'Courier New', monospace;
+}
+
+.transition-controls-section {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.transition-controls-section label {
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+#transition-type {
+  padding: 8px 12px;
+  background: var(--bg-item);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#transition-type:hover {
+  background: var(--bg-hover);
+}
+
+.btn-go-live {
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--radius);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex: 1;
+  min-width: 120px;
+}
+
+.btn-go-live:hover {
+  background: #ff6580;
+  transform: translateY(-1px);
+}
+
+.btn-go-live:active {
+  transform: scale(0.95);
+}
+
+.btn-go-live:disabled {
+  background: var(--text-dim);
+  cursor: not-allowed;
+  transform: none;
+}

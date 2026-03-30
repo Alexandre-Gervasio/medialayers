@@ -40,6 +40,36 @@ const streamChannel = new BroadcastChannel('medialayers-streams')
 let previewCanvas = null
 let previewCtx = null
 
+// ═════════════════════════════════════════════════════════════
+// FASE 2: MONITORES DE SAÍDA (Preview + Program)
+// ═════════════════════════════════════════════════════════════
+let monitorPreviewCanvas = null
+let monitorPreviewCtx = null
+let monitorProgramCanvas = null
+let monitorProgramCtx = null
+
+// Estado de saída
+const outputState = {
+  preview: {
+    row: null,
+    col: null,
+    cellId: null,
+    layers: [],
+  },
+  program: {
+    row: null,
+    col: null,
+    cellId: null,
+    layers: [],
+  },
+  transition: {
+    type: 'cut',        // 'cut', 'fade', 'dissolve'
+    duration: 500,      // ms
+    isTransitioning: false,
+    startTime: null,
+  }
+}
+
 // ─────────────────────────────────────────────
 // BLENDING MODES DISPONÍVEIS
 // ─────────────────────────────────────────────
@@ -177,6 +207,11 @@ function selectCell(row, col) {
   renderLayersPanel()
   renderProperties()
   updateCellInfo()
+  
+  // FASE 2: Renderiza monitor preview quando célula é selecionada
+  outputState.preview.row = row
+  outputState.preview.col = col
+  renderMonitorPreview(row, col)
 }
 
 // ─────────────────────────────────────────────
@@ -549,6 +584,219 @@ function setupPreviewCanvas() {
   }
 }
 
+// ═════════════════════════════════════════════════════════════
+// FASE 2: SETUP OUTPUT MONITORS
+// ═════════════════════════════════════════════════════════════
+function setupOutputMonitors() {
+  monitorPreviewCanvas = document.getElementById('monitor-preview')
+  if (monitorPreviewCanvas) {
+    monitorPreviewCtx = monitorPreviewCanvas.getContext('2d')
+    monitorPreviewCtx.fillStyle = '#000000'
+    monitorPreviewCtx.fillRect(0, 0, monitorPreviewCanvas.width, monitorPreviewCanvas.height)
+  }
+
+  monitorProgramCanvas = document.getElementById('monitor-program')
+  if (monitorProgramCanvas) {
+    monitorProgramCtx = monitorProgramCanvas.getContext('2d')
+    monitorProgramCtx.fillStyle = '#000000'
+    monitorProgramCtx.fillRect(0, 0, monitorProgramCanvas.width, monitorProgramCanvas.height)
+  }
+
+  // Bot ON AIR
+  const btnGoLive = document.getElementById('btn-go-live')
+  if (btnGoLive) {
+    btnGoLive.addEventListener('click', () => {
+      if (outputState.preview.row !== null && outputState.preview.col !== null) {
+        sendToProgram()
+      }
+    })
+  }
+
+  // Transição selector
+  const transitionType = document.getElementById('transition-type')
+  if (transitionType) {
+    transitionType.addEventListener('change', (e) => {
+      outputState.transition.type = e.target.value
+      // Atualizar duração baseado no tipo
+      switch (outputState.transition.type) {
+        case 'cut': outputState.transition.duration = 0; break
+        case 'fade': outputState.transition.duration = 500; break
+        case 'dissolve': outputState.transition.duration = 1000; break
+      }
+    })
+  }
+
+  console.log('✓ Output Monitors configurados')
+}
+
+// ═════════════════════════════════════════════════════════════
+// RENDERIZAR MONITOR PREVIEW (Célula em Preparação)
+// ═════════════════════════════════════════════════════════════
+function renderMonitorPreview(row, col) {
+  if (!monitorPreviewCanvas || !monitorPreviewCtx) return
+
+  const cell = grid[row][col]
+  const w = monitorPreviewCanvas.width
+  const h = monitorPreviewCanvas.height
+
+  // Limpa canvas
+  monitorPreviewCtx.fillStyle = '#000000'
+  monitorPreviewCtx.fillRect(0, 0, w, h)
+
+  if (cell.layers.length === 0) {
+    monitorPreviewCtx.fillStyle = '#444444'
+    monitorPreviewCtx.font = '20px Arial'
+    monitorPreviewCtx.textAlign = 'center'
+    monitorPreviewCtx.fillText('Preparando...', w / 2, h / 2)
+    return
+  }
+
+  // Stack-based rendering
+  cell.layers.forEach((layer) => {
+    if (!layer.visible) return
+
+    monitorPreviewCtx.globalCompositeOperation = BLEND_MODES[layer.blendMode] || 'source-over'
+    monitorPreviewCtx.globalAlpha = layer.opacity
+
+    // Renderiza cada tipo
+    if (layer.type === 'video' && layer.src) {
+      monitorPreviewCtx.fillStyle = 'rgba(100, 100, 100, 0.5)'
+      monitorPreviewCtx.fillRect(10, 10, w - 20, h - 20)
+      monitorPreviewCtx.fillStyle = '#ffffff'
+      monitorPreviewCtx.font = '16px Arial'
+      monitorPreviewCtx.textAlign = 'center'
+      monitorPreviewCtx.fillText('🎥 ' + layer.name, w / 2, h / 2)
+    }
+
+    if (layer.type === 'image' && layer.src) {
+      const img = new Image()
+      img.onload = () => {
+        monitorPreviewCtx.drawImage(img, 0, 0, w, h)
+      }
+      img.src = layer.src
+    }
+
+    if (layer.type === 'text' && layer.text) {
+      monitorPreviewCtx.fillStyle = layer.fontBg
+      monitorPreviewCtx.fillRect(0, h - 100, w, 100)
+      monitorPreviewCtx.fillStyle = layer.fontColor
+      monitorPreviewCtx.font = `${layer.fontSize}px Arial`
+      monitorPreviewCtx.textAlign = 'center'
+      monitorPreviewCtx.fillText(layer.text, w / 2, h - 30)
+    }
+  })
+
+  monitorPreviewCtx.globalCompositeOperation = 'source-over'
+  monitorPreviewCtx.globalAlpha = 1
+
+  // Atualiza info
+  const info = document.getElementById('monitor-preview-info')
+  if (info) {
+    info.textContent = `[${row}, ${col}] • ${cell.layers.length} camadas`
+  }
+}
+
+// ═════════════════════════════════════════════════════════════
+// RENDERIZAR MONITOR PROGRAM (Público)
+// ═════════════════════════════════════════════════════════════
+function renderMonitorProgram(row, col) {
+  if (!monitorProgramCanvas || !monitorProgramCtx) return
+
+  const cell = grid[row][col]
+  const w = monitorProgramCanvas.width
+  const h = monitorProgramCanvas.height
+
+  // Limpa canvas
+  monitorProgramCtx.fillStyle = '#000000'
+  monitorProgramCtx.fillRect(0, 0, w, h)
+
+  if (cell.layers.length === 0) {
+    monitorProgramCtx.fillStyle = '#333333'
+    monitorProgramCtx.font = '20px Arial'
+    monitorProgramCtx.textAlign = 'center'
+    monitorProgramCtx.fillText('🔴 STANDBY', w / 2, h / 2)
+    return
+  }
+
+  // Stack-based rendering (mesmo que preview)
+  cell.layers.forEach((layer) => {
+    if (!layer.visible) return
+
+    monitorProgramCtx.globalCompositeOperation = BLEND_MODES[layer.blendMode] || 'source-over'
+    monitorProgramCtx.globalAlpha = layer.opacity
+
+    if (layer.type === 'video' && layer.src) {
+      monitorProgramCtx.fillStyle = 'rgba(100, 100, 100, 0.5)'
+      monitorProgramCtx.fillRect(10, 10, w - 20, h - 20)
+      monitorProgramCtx.fillStyle = '#ffffff'
+      monitorProgramCtx.font = '16px Arial'
+      monitorProgramCtx.textAlign = 'center'
+      monitorProgramCtx.fillText('🎥 ' + layer.name, w / 2, h / 2)
+    }
+
+    if (layer.type === 'image' && layer.src) {
+      const img = new Image()
+      img.onload = () => {
+        monitorProgramCtx.drawImage(img, 0, 0, w, h)
+      }
+      img.src = layer.src
+    }
+
+    if (layer.type === 'text' && layer.text) {
+      monitorProgramCtx.fillStyle = layer.fontBg
+      monitorProgramCtx.fillRect(0, h - 100, w, 100)
+      monitorProgramCtx.fillStyle = layer.fontColor
+      monitorProgramCtx.font = `${layer.fontSize}px Arial`
+      monitorProgramCtx.textAlign = 'center'
+      monitorProgramCtx.fillText(layer.text, w / 2, h - 30)
+    }
+  })
+
+  monitorProgramCtx.globalCompositeOperation = 'source-over'
+  monitorProgramCtx.globalAlpha = 1
+
+  // Atualiza info
+  const info = document.getElementById('monitor-program-info')
+  if (info) {
+    info.textContent = `🔴 AO AR: [${row}, ${col}] • ${cell.layers.length} camadas`
+  }
+}
+
+// ═════════════════════════════════════════════════════════════
+// ENVIAR PARA PROGRAM (ON AIR COM TRANSIÇÃO)
+// ═════════════════════════════════════════════════════════════
+function sendToProgram() {
+  if (outputState.preview.row === null || outputState.preview.col === null) return
+
+  const row = outputState.preview.row
+  const col = outputState.preview.col
+  const transitionType = outputState.transition.type
+  const duration = outputState.transition.duration
+
+  // Atualiza estado do program
+  outputState.program.row = row
+  outputState.program.col = col
+  outputState.program.cellId = grid[row][col].id
+
+  // Se transição é cut, já muda
+  if (transitionType === 'cut' || duration === 0) {
+    renderMonitorProgram(row, col)
+    console.log(`✓ Program updated: [${row}, ${col}]`)
+  } else {
+    // Para transições, aplicar fade/dissolve depois (TODO: implementar interpolação)
+    setTimeout(() => {
+      renderMonitorProgram(row, col)
+    }, duration)
+  }
+
+  // Disable botão por um tempo
+  const btn = document.getElementById('btn-go-live')
+  if (btn) {
+    btn.disabled = true
+    setTimeout(() => { btn.disabled = false }, duration + 100)
+  }
+}
+
 // ─────────────────────────────────────────────
 // TABS
 // ─────────────────────────────────────────────
@@ -608,6 +856,9 @@ function updateGridSize() {
 
   // Setup canvas
   setupPreviewCanvas()
+  
+  // FASE 2: Setup output monitors
+  setupOutputMonitors()
 
   // Setup tabs
   setupTabs()
@@ -618,6 +869,19 @@ function updateGridSize() {
   // Renderiza UI
   renderGrid()
   updateCellInfo()
+  
+  // FASE 2: Renderiza monitores em standby
+  const emptyCell = { layers: [] }
+  const emptyCanvas = monitorProgramCanvas
+  if (emptyCanvas) {
+    const ctx = emptyCanvas.getContext('2d')
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, emptyCanvas.width, emptyCanvas.height)
+    ctx.fillStyle = '#333333'
+    ctx.font = '20px Arial'
+    ctx.textAlign = 'center'
+    ctx.fillText('🔴 STANDBY', emptyCanvas.width / 2, emptyCanvas.height / 2)
+  }
 
   // Event listeners - Header controls
   document.getElementById('btn-update-grid')?.addEventListener('click', updateGridSize)

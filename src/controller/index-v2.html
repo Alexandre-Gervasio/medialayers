@@ -68,6 +68,7 @@
       <div class="tabs-header">
         <button class="tab-btn active" data-tab="grid-view">📊 Grid</button>
         <button class="tab-btn" data-tab="preview-view">👁 Preview</button>
+        <button class="tab-btn" data-tab="output-view">📡 Saída</button>
       </div>
 
       <!-- Grid de Células (com scroll obrigatório) -->
@@ -84,6 +85,33 @@
           <div class="preview-controls">
             <button class="btn btn-sm" id="btn-play-preview">▶ Play</button>
             <button class="btn btn-sm" id="btn-stop-preview">⏹ Stop</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Preview + Program Monitors (Fase 2) -->
+      <div id="output-view" class="tab-content">
+        <div class="output-monitors-container">
+          <div class="monitor-section">
+            <div class="monitor-label">👁 PREVIEW (Preparando)</div>
+            <canvas id="monitor-preview" class="monitor-canvas" width="960" height="540"></canvas>
+            <div class="monitor-info" id="monitor-preview-info">Nenhuma célula selecionada</div>
+          </div>
+
+          <div class="transition-controls-section">
+            <label>⏱ Transição:</label>
+            <select id="transition-type">
+              <option value="cut">Cut (instantâneo)</option>
+              <option value="fade">Fade (500ms)</option>
+              <option value="dissolve">Dissolve (1000ms)</option>
+            </select>
+            <button class="btn btn-go-live" id="btn-go-live">→ ON AIR</button>
+          </div>
+
+          <div class="monitor-section">
+            <div class="monitor-label live">📺 PROGRAM (Público)</div>
+            <canvas id="monitor-program" class="monitor-canvas" width="960" height="540"></canvas>
+            <div class="monitor-info" id="monitor-program-info">🔴 Nada ao ar</div>
           </div>
         </div>
       </div>
