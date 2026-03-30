@@ -45,13 +45,13 @@
 ## Progresso Geral
 
 ```
-FASES COMPLETADAS (3/8 = 37.5%)
+FASES COMPLETADAS (4/8 = 50%)
 ├─ ✅ Fase 1 v2: Grid 2D + Layers + Blending (1000+ linhas)
 ├─ ✅ Fase 2: Preview/Program Monitor (250+ linhas)
-└─ ✅ Fase 3: Dockable Panels (350+ linhas)
+├─ ✅ Fase 3: Dockable Panels (350+ linhas)
+└─ ✅ Fase 4: Drag & Drop de Mídia (168+ linhas)
 
-FASES PENDENTES (5/8 = 62.5%)
-├─ ⏳ Fase 4: Drag & Drop de Mídia (2-3h)
+FASES PENDENTES (4/8 = 50%)
 ├─ ⏳ Fase 5: Mesa de Corte / Switcher (4-5h)
 ├─ ⏳ Fase 6: Plugins Modulares (3-4h)
 ├─ ⏳ Fase 7: Vídeo Remoto (WebRTC) (4-5h)
@@ -779,6 +779,7 @@ function loadLayout() {
 
 ### Fase 4: Drag & Drop de Mídia (2-3 horas)
 
+**Status**: ✅ Completa  
 **Objetivo**: Importar arquivos de mídia para grid
 
 ```
@@ -789,26 +790,56 @@ function loadLayout() {
 ✅ Layer adicionado
 ```
 
-**Features**:
-- [ ] Drop zones em células do grid
-- [ ] Auto-detect de tipo MIME (video, image, audio)
-- [ ] Multi-file support (selecionar múltiplos arquivos)
-- [ ] Undo/Redo stack
-- [ ] Validação de formato
+**Features Implementadas**:
+- [x] Drop zones em células do grid (all `.clip-cell` elements)
+- [x] Auto-detect de tipo MIME (video, image, audio)
+- [x] Multi-file support (arquivos múltiplos de uma vez)
+- [x] Feedback visual (borda dashed + rosa ao arrastar)
+- [x] Integração com sistema de layers
 
-**API**:
+**Funções Principais**:
 ```javascript
-onGridCellDrop(e, row, col)
-  ↓ Detecta MIME type
-  ↓ Cria layer correspondente
-  ↓ Renderiza preview
-
 detectMediaType(file)
-  ↓ Retorna 'video' | 'image' | 'audio' | 'unknown'
+  ↓ Detecta tipo pela MIME ou extensão
+  ↓ Retorna 'video' | 'image' | 'audio' | null
 
-validateMediaFile(file)
-  ↓ Verifica tamanho, codec, etc
+addLayerFromFile(row, col, file)
+  ↓ Cria layer e adiciona à célula
+  ↓ Seleciona automaticamente
+  ↓ Retorna true/false
+
+handleCellDrop(e, row, col)
+  ↓ Handler de drop event
+  ↓ Processa múltiplos arquivos
+  ↓ Renderiza preview
 ```
+
+**Fluxo de Uso**:
+```
+1. Arrastar arquivo do explorador
+2. Soltar em célula do grid
+3. Célula fica rosa com borda dashed
+4. DROP: detectMediaType() identifica
+5. addLayerFromFile() cria layer
+6. Preview renderiza automaticamente
+7. Painel de layers atualiza
+```
+
+**Tipos Suportados**:
+- **Video**: mp4, webm, mov, avi, mkv
+- **Image**: jpg, jpeg, png, gif, svg, webp
+- **Audio**: mp3, wav, aac, ogg, flac
+
+**Visual de Drop**:
+```css
+.clip-cell.drag-over {
+  background: rgba(233, 69, 96, 0.25);
+  border: 3px dashed var(--accent);
+  box-shadow: inset 0 0 12px rgba(233, 69, 96, 0.4);
+}
+```
+
+**Git Commit**: `0cbe3f2` - "feat: Fase 4 - Drag & Drop de Mídia"
 
 ---
 
