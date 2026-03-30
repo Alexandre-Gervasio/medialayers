@@ -17,10 +17,23 @@
       <span class="version">v2.0 - GRID</span>
     </div>
     <div class="header-controls">
-      <input type="number" id="grid-rows" value="4" min="1" max="12" placeholder="Linhas">
-      <span>×</span>
-      <input type="number" id="grid-cols" value="6" min="1" max="12" placeholder="Colunas">
-      <button class="btn btn-primary" id="btn-update-grid">Atualizar Grid</button>
+      <!-- Y (LINHAS - Vertical) -->
+      <div class="grid-control-group">
+        <label>Y (Linhas):</label>
+        <button class="btn btn-sm" id="btn-remove-row" title="Remover linha">−</button>
+        <input type="number" id="grid-rows" value="4" min="1" max="12" placeholder="Y">
+        <button class="btn btn-sm" id="btn-add-row" title="Adicionar linha">+</button>
+      </div>
+
+      <!-- X (COLUNAS - Horizontal) -->
+      <div class="grid-control-group">
+        <label>X (Colunas):</label>
+        <button class="btn btn-sm" id="btn-remove-col" title="Remover coluna">−</button>
+        <input type="number" id="grid-cols" value="6" min="1" max="12" placeholder="X">
+        <button class="btn btn-sm" id="btn-add-col" title="Adicionar coluna">+</button>
+      </div>
+
+      <button class="btn btn-secondary" id="btn-reset-grid">Resetar</button>
       <button class="btn btn-danger" id="btn-clear-all">Limpar Tudo</button>
     </div>
   </header>

@@ -71,7 +71,44 @@ header {
 .header-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* GRUPOS DE CONTROLE DO GRID */
+.grid-control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-item);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.grid-control-group label {
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+}
+
+.grid-control-group input {
+  width: 40px;
+  padding: 4px 6px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.grid-control-group .btn {
+  padding: 4px 8px;
+  font-size: 14px;
+  min-width: 30px;
 }
 
 #grid-rows, #grid-cols {

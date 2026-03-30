@@ -848,6 +848,65 @@ function updateGridSize() {
   updateCellInfo()
 }
 
+// ═════════════════════════════════════════════════════════════
+// FUNÇÕES PARA ADICIONAR/REMOVER LINHAS E COLUNAS DINAMICAMENTE
+// ═════════════════════════════════════════════════════════════
+
+function addRow() {
+  const newRows = gridRows + 1
+  if (newRows > 12) {
+    alert('Máximo de 12 linhas atingido')
+    return
+  }
+  
+  document.getElementById('grid-rows').value = newRows
+  updateGridSize()
+  console.log(`✓ Linha adicionada: ${gridRows} linhas`)
+}
+
+function removeRow() {
+  const newRows = gridRows - 1
+  if (newRows < 1) {
+    alert('Mínimo de 1 linha requerido')
+    return
+  }
+  
+  document.getElementById('grid-rows').value = newRows
+  updateGridSize()
+  console.log(`✓ Linha removida: ${gridRows} linhas`)
+}
+
+function addColumn() {
+  const newCols = gridCols + 1
+  if (newCols > 12) {
+    alert('Máximo de 12 colunas atingido')
+    return
+  }
+  
+  document.getElementById('grid-cols').value = newCols
+  updateGridSize()
+  console.log(`✓ Coluna adicionada: ${gridCols} colunas`)
+}
+
+function removeColumn() {
+  const newCols = gridCols - 1
+  if (newCols < 1) {
+    alert('Mínimo de 1 coluna requerido')
+    return
+  }
+  
+  document.getElementById('grid-cols').value = newCols
+  updateGridSize()
+  console.log(`✓ Coluna removida: ${gridCols} colunas`)
+}
+
+function resetGrid() {
+  document.getElementById('grid-rows').value = 4
+  document.getElementById('grid-cols').value = 6
+  updateGridSize()
+  console.log('✓ Grid resetado para 4×6')
+}
+
 // ─────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────
@@ -884,7 +943,11 @@ function updateGridSize() {
   }
 
   // Event listeners - Header controls
-  document.getElementById('btn-update-grid')?.addEventListener('click', updateGridSize)
+  document.getElementById('btn-add-row')?.addEventListener('click', addRow)
+  document.getElementById('btn-remove-row')?.addEventListener('click', removeRow)
+  document.getElementById('btn-add-col')?.addEventListener('click', addColumn)
+  document.getElementById('btn-remove-col')?.addEventListener('click', removeColumn)
+  document.getElementById('btn-reset-grid')?.addEventListener('click', resetGrid)
   document.getElementById('btn-clear-all')?.addEventListener('click', clearAll)
 
   // Event listeners - Media buttons
