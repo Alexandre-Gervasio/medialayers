@@ -26,8 +26,8 @@ normal, multiply, screen, overlay, add, subtract, lighten, darken, etc
 // ESTADO GLOBAL
 // ─────────────────────────────────────────────
 let grid = []                    // Matriz 2D de células
-let gridRows = 4                 // Linhas do grid
-let gridCols = 6                 // Colunas do grid
+let gridRows = 1                 // Linhas do grid (inicia com 1)
+let gridCols = 1                 // Colunas do grid (inicia com 1)
 let selectedCell = null          // {row, col} célula selecionada
 let selectedLayerId = null       // ID da layer selecionada
 let nextId = 1
@@ -1177,10 +1177,50 @@ function removeColumn() {
 }
 
 function resetGrid() {
-  document.getElementById('grid-rows').value = 4
-  document.getElementById('grid-cols').value = 6
+  document.getElementById('grid-rows').value = 1
+  document.getElementById('grid-cols').value = 1
   updateGridSize()
-  console.log('✓ Grid resetado para 4×6')
+  console.log('✓ Grid resetado para 1×1')
+}
+
+// ─────────────────────────────────────────────
+// FASE 3: DOCKABLE PANELS
+// ─────────────────────────────────────────────
+function setupDockablePanels() {
+  // Painel esquerdo (Célula Selecionada)
+  const leftPanel = new DockablePanel(
+    'left',
+    'Célula Selecionada',
+    document.getElementById('panel-left'),
+    0, 0, 280, window.innerHeight
+  )
+
+  // Painel direito (Propriedades)
+  const rightPanel = new DockablePanel(
+    'right',
+    'Propriedades',
+    document.getElementById('panel-right'),
+    window.innerWidth - 260, 0, 260, window.innerHeight
+  )
+
+  // Event listeners para botões dos painéis
+  document.getElementById('btn-minimize-left')?.addEventListener('click', () => {
+    leftPanel.minimize()
+  })
+
+  document.getElementById('btn-undock-left')?.addEventListener('click', () => {
+    leftPanel.toggleFloat()
+  })
+
+  document.getElementById('btn-minimize-right')?.addEventListener('click', () => {
+    rightPanel.minimize()
+  })
+
+  document.getElementById('btn-undock-right')?.addEventListener('click', () => {
+    rightPanel.toggleFloat()
+  })
+
+  console.log('✓ Painéis dockable inicializados')
 }
 
 // ─────────────────────────────────────────────
@@ -1194,6 +1234,9 @@ function resetGrid() {
   
   // FASE 2: Setup output monitors
   setupOutputMonitors()
+
+  // FASE 3: Setup dockable panels
+  setupDockablePanels()
 
   // Setup tabs
   setupTabs()

@@ -21,7 +21,7 @@
       <div class="grid-control-group">
         <label>Y (Linhas):</label>
         <button class="btn btn-sm" id="btn-remove-row" title="Remover linha">−</button>
-        <input type="number" id="grid-rows" value="4" min="1" max="12" placeholder="Y">
+        <input type="number" id="grid-rows" value="1" min="1" max="12" placeholder="Y">
         <button class="btn btn-sm" id="btn-add-row" title="Adicionar linha">+</button>
       </div>
 
@@ -29,7 +29,7 @@
       <div class="grid-control-group">
         <label>X (Colunas):</label>
         <button class="btn btn-sm" id="btn-remove-col" title="Remover coluna">−</button>
-        <input type="number" id="grid-cols" value="6" min="1" max="12" placeholder="X">
+        <input type="number" id="grid-cols" value="1" min="1" max="12" placeholder="X">
         <button class="btn btn-sm" id="btn-add-col" title="Adicionar coluna">+</button>
       </div>
 
@@ -57,34 +57,45 @@
   <div class="workspace">
 
     <!-- ┌─ PAINEL ESQUERDO: Editor de Célula ─┐ -->
-    <aside class="panel panel-left">
-      <div class="panel-header">
-        <h2>📍 Célula Selecionada</h2>
-      </div>
-
-      <div class="cell-info">
-        <div class="info-display">
-          <span id="cell-coords">Nenhuma célula selecionada</span>
+    <aside class="dockable-panel-wrapper" id="panel-left-wrapper">
+      <div class="dockable-panel" id="panel-left">
+        <div class="panel-header-dockable">
+          <span class="panel-title">📍 Célula Selecionada</span>
+          <div class="panel-header-buttons">
+            <button class="panel-btn" id="btn-minimize-left" title="Minimizar">−</button>
+            <button class="panel-btn" id="btn-undock-left" title="Desacoplar">⏏</button>
+          </div>
         </div>
-      </div>
 
-      <!-- Layers da célula -->
-      <div class="panel-header" style="margin-top: 10px;">
-        <h3>Camadas</h3>
-        <button class="btn btn-sm" id="btn-add-layer" title="Adicionar camada">➕</button>
-      </div>
+        <div class="panel-content-dockable">
+          <div class="cell-info">
+            <div class="info-display">
+              <span id="cell-coords">Nenhuma célula selecionada</span>
+            </div>
+          </div>
 
-      <div id="layers-panel" class="layers-panel">
-        <!-- Layers renderizadas aqui -->
-      </div>
+          <!-- Layers da célula -->
+          <div class="panel-header" style="margin-top: 10px;">
+            <h3>Camadas</h3>
+            <button class="btn btn-sm" id="btn-add-layer" title="Adicionar camada">➕</button>
+          </div>
 
-      <!-- Toolbar de mídia -->
-      <div class="media-toolbar">
-        <button class="btn btn-sm" id="btn-add-video" title="Vídeo">🎥</button>
-        <button class="btn btn-sm" id="btn-add-image" title="Imagem">🖼</button>
-        <button class="btn btn-sm" id="btn-add-audio" title="Áudio">🔊</button>
-        <button class="btn btn-sm" id="btn-add-text" title="Texto">📝</button>
-        <button class="btn btn-sm" id="btn-add-camera" title="Câmera">📷</button>
+          <div id="layers-panel" class="layers-panel">
+            <!-- Layers renderizadas aqui -->
+          </div>
+
+          <!-- Toolbar de mídia -->
+          <div class="media-toolbar">
+            <button class="btn btn-sm" id="btn-add-video" title="Vídeo">🎥</button>
+            <button class="btn btn-sm" id="btn-add-image" title="Imagem">🖼</button>
+            <button class="btn btn-sm" id="btn-add-audio" title="Áudio">🔊</button>
+            <button class="btn btn-sm" id="btn-add-text" title="Texto">📝</button>
+            <button class="btn btn-sm" id="btn-add-camera" title="Câmera">📷</button>
+          </div>
+        </div>
+
+        <!-- Handle de resize -->
+        <div class="resize-handle" id="resize-left"></div>
       </div>
     </aside>
 
@@ -175,13 +186,24 @@
     </main>
 
     <!-- ┌─ PAINEL DIREITO: Propriedades ─┐ -->
-    <aside class="panel panel-right">
-      <div class="panel-header">
-        <h2>⚙️ Propriedades</h2>
-      </div>
+    <aside class="dockable-panel-wrapper" id="panel-right-wrapper">
+      <div class="dockable-panel" id="panel-right">
+        <div class="panel-header-dockable">
+          <span class="panel-title">⚙️ Propriedades</span>
+          <div class="panel-header-buttons">
+            <button class="panel-btn" id="btn-minimize-right" title="Minimizar">−</button>
+            <button class="panel-btn" id="btn-undock-right" title="Desacoplar">⏏</button>
+          </div>
+        </div>
 
-      <div id="properties-panel" class="properties-panel">
-        <!-- Props da layer selecionada renderizadas aqui -->
+        <div class="panel-content-dockable">
+          <div id="properties-panel" class="properties-panel">
+            <!-- Props da layer selecionada renderizadas aqui -->
+          </div>
+        </div>
+
+        <!-- Handle de resize -->
+        <div class="resize-handle" id="resize-right"></div>
       </div>
     </aside>
 
