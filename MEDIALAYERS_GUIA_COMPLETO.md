@@ -203,6 +203,12 @@ let columns = [
 **Status**: ✅ Completa (versão atual)  
 **Evolução**: Colunas → Grid 2D profissional
 
+### Grid Inicial: 1×1
+- Interface começa com **uma célula vazia** (1 linha × 1 coluna)
+- Usuário adiciona linhas/colunas conforme necessário (até 12×12)
+- Células vazias servem como **drop zones** para mídia
+- Design limpo focado em usabilidade
+
 ### O que mudou
 
 ```
@@ -217,6 +223,14 @@ grid[1][0].layers[] → grid[1][6]
 ...
 grid[3][0].layers[] → grid[3][6]
 ```
+
+### Painéis Dockable
+- **Painel Esquerdo**: Editor da célula selecionada (arrastável)
+- **Painel Direito**: Propriedades da layer (arrastável)
+- **Headers arrastáveis** para reposicionamento
+- **Botões minimizar** (−) e **desacoplar** (⏏)
+- **Resize handles** nos cantos
+- Layout responsivo com position absolute
 
 ### Estrutura de Dados v2
 
