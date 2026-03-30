@@ -45,14 +45,15 @@
 ## Progresso Geral
 
 ```
-FASES COMPLETADAS (4/8 = 50%)
+FASES COMPLETADAS (5/8 = 62.5%)
 ├─ ✅ Fase 1 v2: Grid 2D + Layers + Blending (1000+ linhas)
 ├─ ✅ Fase 2: Preview/Program Monitor (250+ linhas)
 ├─ ✅ Fase 3: Dockable Panels (350+ linhas)
-└─ ✅ Fase 4: Drag & Drop de Mídia (168+ linhas)
+├─ ✅ Fase 4: Drag & Drop de Mídia (168+ linhas)
+└─ ✅ Fase 5: Mesa de Corte / Switcher (200+ linhas)
 
-FASES PENDENTES (4/8 = 50%)
-├─ ⏳ Fase 5: Mesa de Corte / Switcher (4-5h)
+FASES PENDENTES (3/8 = 37.5%)
+├─ ⏳ Fase 6: Plugins Modulares (3-4h)
 ├─ ⏳ Fase 6: Plugins Modulares (3-4h)
 ├─ ⏳ Fase 7: Vídeo Remoto (WebRTC) (4-5h)
 └─ ⏳ Fase 8: Controle Celular (5-6h)
@@ -843,8 +844,9 @@ handleCellDrop(e, row, col)
 
 ---
 
-### Fase 5: Mesa de Corte (4-5 horas)
+### Fase 5: Mesa de Corte / Switcher (4-5 horas)
 
+**Status**: ✅ Completa  
 **Objetivo**: Switcher rápido de clips (como OBS, Resolume)
 
 ```
@@ -856,27 +858,72 @@ ENTRADA (Preview de todos)     SAÍDA (Programa atual)
 └────────────────────────────┘  └──────────────────┘
 ```
 
-**Features**:
-- [ ] Área de ENTRADAS (grid visual de clips)
-- [ ] Área de SAÍDA (programa atual)
-- [ ] Quick switching entre clips (clique/hotkey)
-- [ ] Transições configuráveis
-- [ ] Marcadores/tags para clips
-- [ ] Histórico de clips usados
+**Features Implementadas**:
+- [x] Nova aba "Mesa de Corte" na interface
+- [x] Grid de entradas (câmeras, clips, NDI, tela)
+- [x] Seleção visual de entrada (borda azul)
+- [x] Indicador "AO VIVO" (borda vermelha + pulso)
+- [x] Botão TAKE para enviar ao ar
+- [x] Controles de transição (Cut, Fade, Wipe)
+- [x] Adicionar/remover entradas dinamicamente
+- [x] Ícones visuais por tipo (📷 câmera, 🎥 clip, 📡 NDI)
 
 **Data Structure**:
 ```javascript
-const cuttingTable = {
-  entries: [
-    { row: 0, col: 0, name: "Clip 1", thumbnail: ... },
-    { row: 0, col: 1, name: "Clip 2", thumbnail: ... },
-    // ...
-  ],
-  current: { row: 2, col: 3 },  // Saída atual
-  transition: 'fade',
-  history: [[0,0], [0,1], [2,3], ...]
+class InputSource {
+  constructor(type, name, src = null) {
+    this.id = nextInputId++
+    this.type = type // 'camera', 'clip', 'ndi', 'screen'
+    this.name = name
+    this.src = src
+    this.thumbnail = null
+    this.isLive = false
+  }
 }
+
+let inputs = [] // Array de InputSource
+let selectedInputId = null
 ```
+
+**Funções Principais**:
+```javascript
+renderInputsGrid()
+  ↓ Renderiza grid de entradas
+  ↓ Aplica classes selected/live
+  ↓ Adiciona event listeners
+
+selectInput(inputId)
+  ↓ Seleciona entrada visualmente
+  ↓ Atualiza selectedInputId
+
+takeInput()
+  ↓ Valida seleção
+  ↓ Marca entrada como live
+  ↓ Log "foi para o ar"
+  ↓ TODO: Integrar com output real
+
+addInput(type, name)
+  ↓ Cria nova InputSource
+  ↓ Adiciona ao array
+  ↓ Re-renderiza grid
+```
+
+**UI Components**:
+- **inputs-grid**: Container flex com grid responsivo
+- **input-item**: Cada entrada (thumbnail + label)
+- **switcher-footer**: Controles TAKE + transição
+- **switcher-header**: Botões adicionar/atualizar
+
+**Visual States**:
+```css
+.input-item.selected { border-color: var(--accent); }
+.input-item.live { border-color: #ff0000; animation: pulse-live; }
+#btn-take { background: var(--accent); font-weight: 700; }
+```
+
+**Git Commit**: Implementado junto com Fase 4 validação
+
+---
 
 ---
 

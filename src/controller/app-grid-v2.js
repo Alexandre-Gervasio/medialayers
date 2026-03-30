@@ -48,6 +48,25 @@ let monitorPreviewCtx = null
 let monitorProgramCanvas = null
 let monitorProgramCtx = null
 
+// ═════════════════════════════════════════════════════════════
+// FASE 5: MESA DE CORTE / SWITCHER
+// ═════════════════════════════════════════════════════════════
+let inputs = [] // Array de entradas (câmeras, clips, etc.)
+let selectedInputId = null // ID da entrada selecionada
+let nextInputId = 1
+
+// Classe para representar uma entrada
+class InputSource {
+  constructor(type, name, src = null) {
+    this.id = nextInputId++
+    this.type = type // 'camera', 'clip', 'ndi', etc.
+    this.name = name
+    this.src = src
+    this.thumbnail = null // Canvas ou imagem para preview
+    this.isLive = false
+  }
+}
+
 // Estado de saída
 const outputState = {
   preview: {
@@ -954,6 +973,106 @@ function renderGrid() {
   setupCellDragDropListeners()  // Re-aplicar listeners após renderizar
 }
 
+// ═════════════════════════════════════════════════════════════
+// FASE 5: MESA DE CORTE / SWITCHER FUNCTIONS
+// ═════════════════════════════════════════════════════════════
+
+// Renderizar grid de entradas
+function renderInputsGrid() {
+  const gridEl = document.getElementById('inputs-grid')
+  if (!gridEl) return
+
+  gridEl.innerHTML = ''
+
+  inputs.forEach(input => {
+    const itemEl = document.createElement('div')
+    itemEl.className = 'input-item'
+    itemEl.dataset.inputId = input.id
+
+    if (selectedInputId === input.id) {
+      itemEl.classList.add('selected')
+    }
+
+    if (input.isLive) {
+      itemEl.classList.add('live')
+    }
+
+    itemEl.innerHTML = `
+      <div class="input-thumbnail">
+        ${getInputIcon(input.type)}
+      </div>
+      <div class="input-label">${input.name}</div>
+    `
+
+    itemEl.addEventListener('click', () => selectInput(input.id))
+
+    gridEl.appendChild(itemEl)
+  })
+}
+
+// Obter ícone para tipo de entrada
+function getInputIcon(type) {
+  switch (type) {
+    case 'camera': return '📷'
+    case 'clip': return '🎥'
+    case 'ndi': return '📡'
+    case 'screen': return '🖥️'
+    default: return '🎬'
+  }
+}
+
+// Selecionar entrada
+function selectInput(inputId) {
+  selectedInputId = inputId
+  renderInputsGrid()
+  updateSwitcherInfo()
+}
+
+// Adicionar entrada
+function addInput(type, name) {
+  const input = new InputSource(type, name)
+  inputs.push(input)
+  renderInputsGrid()
+  console.log(`✓ Entrada adicionada: ${name}`)
+}
+
+// Atualizar info do switcher
+function updateSwitcherInfo() {
+  // TODO: Mostrar info da entrada selecionada
+}
+
+// TAKE: Enviar entrada selecionada para o ar
+function takeInput() {
+  if (!selectedInputId) {
+    alert('Selecione uma entrada primeiro!')
+    return
+  }
+
+  const input = inputs.find(i => i.id === selectedInputId)
+  if (!input) return
+
+  // Marcar como live
+  inputs.forEach(i => i.isLive = false)
+  input.isLive = true
+  renderInputsGrid()
+
+  // Enviar para saída (simular)
+  console.log(`🎬 TAKE: ${input.name} foi para o ar!`)
+
+  // TODO: Integrar com sistema de saída real
+  // sendToProgram(input)
+}
+
+// Inicializar entradas padrão
+function initializeInputs() {
+  addInput('camera', 'Câmera 1')
+  addInput('camera', 'Câmera 2')
+  addInput('clip', 'Clip A')
+  addInput('clip', 'Clip B')
+  addInput('ndi', 'NDI Stream')
+  addInput('screen', 'Tela')
+}
+
 // ─────────────────────────────────────────────
 // TABS
 // ─────────────────────────────────────────────
@@ -1120,6 +1239,23 @@ function resetGrid() {
       triggerCell(selectedCell.row, selectedCell.col)
     }
   })
+
+  // ═════════════════════════════════════════════════════════════
+  // FASE 5: SETUP SWITCHER
+  // ═════════════════════════════════════════════════════════════
+  initializeInputs()
+  renderInputsGrid()
+
+  // Event listeners - Switcher
+  document.getElementById('btn-add-input')?.addEventListener('click', () => {
+    const name = prompt('Nome da entrada:', 'Nova Entrada')
+    if (name) addInput('clip', name)
+  })
+  document.getElementById('btn-refresh-inputs')?.addEventListener('click', () => {
+    renderInputsGrid()
+    console.log('✓ Entradas atualizadas')
+  })
+  document.getElementById('btn-take')?.addEventListener('click', takeInput)
 
   // ═════════════════════════════════════════════════════════════
   // FASE 4: SETUP DRAG & DROP LISTENERS

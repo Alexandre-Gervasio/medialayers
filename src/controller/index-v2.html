@@ -142,6 +142,36 @@
           </div>
         </div>
       </div>
+
+      <!-- Mesa de Corte / Switcher (Fase 5) -->
+      <div id="switcher-view" class="tab-content">
+        <div class="switcher-container">
+          <div class="switcher-header">
+            <h3>🎛 Mesa de Corte - Entradas Rápidas</h3>
+            <div class="switcher-controls">
+              <button class="btn btn-sm" id="btn-add-input" title="Adicionar entrada">➕ Entrada</button>
+              <button class="btn btn-sm" id="btn-refresh-inputs" title="Atualizar entradas">🔄</button>
+            </div>
+          </div>
+
+          <div id="inputs-grid" class="inputs-grid">
+            <!-- Entradas renderizadas aqui -->
+          </div>
+
+          <div class="switcher-footer">
+            <div class="transition-section">
+              <label>Transição:</label>
+              <select id="switcher-transition-type">
+                <option value="cut">Cut</option>
+                <option value="fade">Fade</option>
+                <option value="wipe">Wipe</option>
+              </select>
+              <input type="number" id="transition-duration" value="500" min="100" max="5000" step="100" placeholder="ms">
+            </div>
+            <button class="btn btn-primary" id="btn-take">TAKE</button>
+          </div>
+        </div>
+      </div>
     </main>
 
     <!-- ┌─ PAINEL DIREITO: Propriedades ─┐ -->
