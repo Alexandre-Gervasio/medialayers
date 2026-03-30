@@ -797,6 +797,163 @@ function sendToProgram() {
   }
 }
 
+// ═════════════════════════════════════════════════════════════
+// FASE 4: DRAG & DROP DE MÍDIA (Media Import System)
+// ═════════════════════════════════════════════════════════════
+
+// Detecta tipo de mídia baseado no MIME type
+function detectMediaType(file) {
+  const mimeType = file.type || ''
+  
+  if (mimeType.startsWith('video/')) {
+    return 'video'
+  } else if (mimeType.startsWith('image/')) {
+    return 'image'
+  } else if (mimeType.startsWith('audio/')) {
+    return 'audio'
+  } else {
+    // Fallback: detectar por extensão
+    const ext = file.name.split('.').pop().toLowerCase()
+    if (['mp4', 'webm', 'mov', 'avi', 'mkv'].includes(ext)) {
+      return 'video'
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext)) {
+      return 'image'
+    } else if (['mp3', 'wav', 'aac', 'ogg', 'flac'].includes(ext)) {
+      return 'audio'
+    }
+  }
+  return null
+}
+
+// Adiciona layer a partir de arquivo
+function addLayerFromFile(row, col, file) {
+  const cell = grid[row][col]
+  const mediaType = detectMediaType(file)
+  
+  if (!mediaType) {
+    console.warn(`⚠️ Tipo de arquivo não suportado: ${file.name}`)
+    return false
+  }
+  
+  try {
+    const src = URL.createObjectURL(file)
+    const layer = createLayer(mediaType, file.name, src)
+    cell.layers.push(layer)
+    
+    // Seleciona a nova layer para editar
+    selectLayer(layer.id)
+    renderLayersPanel()
+    renderPreview(row, col)
+    
+    // Atualizar preview monitor também
+    if (selectedCell && selectedCell.row === row && selectedCell.col === col) {
+      renderMonitorPreview(row, col)
+    }
+    
+    console.log(`✓ Layer adicionada: ${file.name} (${mediaType})`)
+    return true
+  } catch (error) {
+    console.error('✗ Erro ao adicionar layer:', error)
+    return false
+  }
+}
+
+// Handle arquivo(s) dropados em uma célula
+function handleCellDrop(e, row, col) {
+  e.preventDefault()
+  e.stopPropagation()
+  
+  const cell = e.currentTarget
+  cell.classList.remove('drag-over')
+  
+  const files = e.dataTransfer.files
+  if (!files || files.length === 0) return
+  
+  // Seleciona a célula primeiro
+  selectCell(row, col)
+  
+  // Adiciona cada arquivo
+  let addedCount = 0
+  for (let i = 0; i < files.length; i++) {
+    if (addLayerFromFile(row, col, files[i])) {
+      addedCount++
+    }
+  }
+  
+  if (addedCount > 0) {
+    console.log(`✓ ${addedCount} arquivo(s) adicionado(s) à célula [${row}, ${col}]`)
+  }
+}
+
+// Setup listeners de drag/drop para todas as células
+function setupDragDropListeners() {
+  // Previne o comportamento padrão de arrastar para fora da janela
+  document.addEventListener('dragover', (e) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  })
+
+  document.addEventListener('drop', (e) => {
+    e.preventDefault()
+  })
+
+  // Listener Global: grid recebe drop
+  const gridEl = document.getElementById('clips-grid')
+  if (gridEl) {
+    gridEl.addEventListener('dragover', (e) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    })
+
+    gridEl.addEventListener('drop', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+    })
+  }
+
+  // Listener por célula (renderizado dinamicamente)
+  // Precisamos re-aplicar após cada renderGrid()
+}
+
+// Aplicar listeners de drag/drop após renderizar células
+function setupCellDragDropListeners() {
+  document.querySelectorAll('.clip-cell').forEach(cellEl => {
+    const row = parseInt(cellEl.dataset.row)
+    const col = parseInt(cellEl.dataset.col)
+    
+    // Quando arrastra SOBRE a célula
+    cellEl.addEventListener('dragenter', (e) => {
+      e.preventDefault()
+      cellEl.classList.add('drag-over')
+    })
+    
+    cellEl.addEventListener('dragover', (e) => {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      cellEl.classList.add('drag-over')
+    })
+    
+    // Quando sai da célula
+    cellEl.addEventListener('dragleave', (e) => {
+      if (e.target === cellEl) {
+        cellEl.classList.remove('drag-over')
+      }
+    })
+    
+    // DROPOUT: Soltar arquivo NA CÉLULA
+    cellEl.addEventListener('drop', (e) => {
+      handleCellDrop(e, row, col)
+    })
+  })
+}
+
+// Modificar renderGrid para chamar setupCellDragDropListeners()
+const originalRenderGrid = renderGrid
+function renderGrid() {
+  originalRenderGrid()
+  setupCellDragDropListeners()  // Re-aplicar listeners após renderizar
+}
+
 // ─────────────────────────────────────────────
 // TABS
 // ─────────────────────────────────────────────
@@ -963,6 +1120,11 @@ function resetGrid() {
       triggerCell(selectedCell.row, selectedCell.col)
     }
   })
+
+  // ═════════════════════════════════════════════════════════════
+  // FASE 4: SETUP DRAG & DROP LISTENERS
+  // ═════════════════════════════════════════════════════════════
+  setupDragDropListeners()
 
   console.log('✓ MediaLayers v2 pronto!')
 })()
