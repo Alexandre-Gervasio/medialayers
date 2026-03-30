@@ -33,6 +33,19 @@
         <button class="btn btn-sm" id="btn-add-col" title="Adicionar coluna">+</button>
       </div>
 
+      <!-- Layout Presets (FASE 3) -->
+      <div class="layout-presets">
+        <label>📐 Layout:</label>
+        <select id="layout-preset">
+          <option value="default">Padrão (3-painéis)</option>
+          <option value="fullscreen-grid">Grid em Tela Cheia</option>
+          <option value="fullscreen-props">Propriedades em Tela Cheia</option>
+          <option value="output-focus">Foco em Saída</option>
+        </select>
+        <button class="btn btn-sm" id="btn-save-layout" title="Salvar layout">💾</button>
+        <button class="btn btn-sm" id="btn-reset-layout" title="Resetar layout">↻</button>
+      </div>
+
       <button class="btn btn-secondary" id="btn-reset-grid">Resetar</button>
       <button class="btn btn-danger" id="btn-clear-all">Limpar Tudo</button>
     </div>
@@ -149,6 +162,7 @@
   <input type="file" id="file-audio" accept="audio/*" style="display:none">
 
   <!-- Scripts -->
+  <script src="dockable-layout.js"></script>
   <script src="app-grid-v2.js"></script>
   <script src="ndi-controller.js"></script>
   <script src="../stream/stream-controller.js"></script>
