@@ -2,19 +2,47 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; media-src 'self' blob: mediastream:; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://golden-layout.com; style-src 'self' 'unsafe-inline' https://golden-layout.com; connect-src 'self' ws://localhost:3001 https://cdn.socket.io">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; media-src 'self' blob: mediastream:; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://golden-layout.com https://code.jquery.com; style-src 'self' 'unsafe-inline' https://golden-layout.com; connect-src 'self' ws://localhost:3001 https://cdn.socket.io">
   <title>MediaLayers — DAW Interface</title>
   <link rel="stylesheet" href="style-v2.css" />
   <link rel="stylesheet" href="https://golden-layout.com/files/latest/css/goldenlayout-base.css" />
   <link rel="stylesheet" href="https://golden-layout.com/files/latest/css/goldenlayout-dark-theme.css" />
   <style>
-    body {
+    html, body {
       margin: 0;
       padding: 0;
+      width: 100%;
+      height: 100%;
       overflow: hidden;
       background: #1a1a1a;
       color: #ffffff;
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    #golden-layout-toolbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 52px;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px;
+      background: rgba(12, 18, 26, 0.92);
+      border-bottom: 1px solid #29313c;
+      backdrop-filter: blur(5px);
+    }
+
+    #golden-layout-container {
+      position: absolute;
+      top: 52px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      overflow: hidden;
+      background: #10141f;
     }
 
     .lm_header {
@@ -37,6 +65,8 @@
       background: #1a1a1a !important;
       border: none !important;
     }
+
+    .layer-item.selected { background: #2f4f5f !important; color: #fff; }
 
     .panel-content {
       padding: 10px;
@@ -175,6 +205,67 @@
       background: #505050;
     }
 
+    .layer-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .layer-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      padding: 8px;
+      border: 1px solid #2f2f2f;
+      background: #181c24;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background .18s ease;
+    }
+
+    .layer-item.selected {
+      background: #0f3f67;
+      border-color: #0085d0;
+    }
+
+    .layer-title {
+      color: #e8eef7;
+      font-size: 12px;
+    }
+
+    .layer-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .toolbar-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 12px;
+      border-radius: 4px;
+      border: 1px solid #38506c;
+      color: #eee;
+      background: #1a273c;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .toolbar-btn:hover {
+      background: #2a3f5f;
+    }
+
+    .toolbar-btn.success { background: #0b702c; border-color: #0e8f3d; }
+    .toolbar-btn.warning { background: #7a4f0a; border-color: #a0701a; }
+    .toolbar-btn.danger  { background: #701515; border-color: #a01f1f; }
+
+    .layer-label {
+      color: #b7d1ec;
+      margin-left: 14px;
+      font-size: 12px;
+    }
+
     .btn-primary {
       background: #007acc;
     }
@@ -240,6 +331,7 @@
   </style>
 </head>
 <body>
+  <div id="golden-layout-toolbar"></div>
   <!-- Container principal do Golden Layout -->
   <div id="golden-layout-container"></div>
 

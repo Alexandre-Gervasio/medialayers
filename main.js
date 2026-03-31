@@ -213,10 +213,48 @@ ipcMain.handle('ndi-stop-sender', async () => {
 })
 
 // Recebe frame capturado da janela de saída e publica via NDI
-ipcMain.on('ndi-output-frame', async (event, { width, height, data }) => {
-  if (!ndi) return
+ipcMain.on('ndi-output-frame', async (event, { width, height, layerId, data }) => {
+  if (!ndi) {
+    console.warn('[NDI] NDI module not available, skipping output frame')
+    return
+  }
+
   const buf = Buffer.from(data)
-  await ndi.sendFrame(width, height, buf)
+
+  if (typeof ndi.sendFrame === 'function') {
+    try {
+      console.log(`[NDI] output frame layer=${layerId} ${width}x${height} (${buf.length} bytes)`)
+      await ndi.sendFrame(width, height, buf)
+    } catch (err) {
+      console.error('[NDI] sendFrame erro:', err)
+    }
+  } else {
+    console.warn('[NDI] sendFrame não implementado no ndi-manager')
+  }
+})
+
+// Captura frame da janela de saída atual em RGBA raw
+ipcMain.handle('capture-output-frame', async (event) => {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender)
+  const fallbackWindow = Object.values(outputWindows).find(win => win && !win.isDestroyed())
+  const win = senderWindow && !senderWindow.isDestroyed() ? senderWindow : fallbackWindow
+
+  if (!win) return null
+
+  try {
+    const image = await win.webContents.capturePage()
+    const size = image.getSize()
+    const bitmap = image.toBitmap()
+
+    return {
+      width: size.width,
+      height: size.height,
+      data: Array.from(bitmap)
+    }
+  } catch (e) {
+    console.warn('[Capture] Erro ao capturar frame:', e.message)
+    return null
+  }
 })
 
 // ─────────────────────────────────────────────
@@ -257,30 +295,15 @@ ipcMain.handle('record-stop', () => {
   if (stream) stream.stopRecording()
 })
 
-// Captura um frame da janela de saída (usado pelo stream e gravação)
-ipcMain.handle('capture-output-frame', async () => {
-  const wins = Object.values(outputWindows)
-  if (wins.length === 0) return null
-  const win = wins[0]
-  if (!win || win.isDestroyed()) return null
-  try {
-    const image = await win.webContents.capturePage()
-    return image.toBitmap()   // Buffer RGBA raw
-  } catch (e) {
-    console.warn('[Capture] Erro ao capturar frame:', e.message)
-    return null
-  }
-})
-
 // Recebe frame do renderer e envia para o stream FFmpeg
-ipcMain.handle('stream-send-frame', (event, frameData) => {
+ipcMain.on('stream-send-frame', (event, frameData) => {
   if (!stream) return
   const buf = Buffer.from(frameData)
   stream.sendStreamFrame(buf)
 })
 
 // Recebe frame e envia para gravação FFmpeg
-ipcMain.handle('record-send-frame', (event, frameData) => {
+ipcMain.on('record-send-frame', (event, frameData) => {
   if (!stream) return
   const buf = Buffer.from(frameData)
   stream.sendRecordFrame(buf)

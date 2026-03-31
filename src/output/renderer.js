@@ -114,19 +114,21 @@ const ndiOutputCtx = ndiOutputCanvas.getContext('2d');
 
 function startNDIOutputCapture() {
   if (ndiOutputInterval) return;
-  ndiOutputCanvas.width = 1920;
-  ndiOutputCanvas.height = 1080;
 
   ndiOutputInterval = setInterval(async () => {
     try {
-      // Estratégia: envia dimensões e deixa o main.js capturar via webContents.capturePage
+      const frame = await window.mediaLayers.captureOutputFrame()
+      if (!frame || !frame.data || frame.data.length === 0) return
+
       window.mediaLayers.sendNdiOutputFrame({
-        width: 1920,
-        height: 1080,
-        data: [] // Frame real capturado pelo main.js
-      });
-    } catch (e) {}
-  }, 1000 / 30); // 30fps
+        width: frame.width,
+        height: frame.height,
+        data: new Uint8Array(frame.data)
+      })
+    } catch (e) {
+      console.error('[MediaLayers] Erro ao capturar/Enviar frame NDI:', e)
+    }
+  }, 1000 / 15) // 15fps mais robusto
 }
 
 // ─────────────────────────────────────────────

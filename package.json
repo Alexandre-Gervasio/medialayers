@@ -2,11 +2,15 @@
   "name": "medialayers",
   "version": "1.0.0",
   "description": "Software de apresentação com camadas de mídia para igrejas e eventos",
+  "author": "MediaLayers Team",
+  "license": "MIT",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "webrtc-server": "node webrtc-server.js",
-    "build": "electron-builder --win"
+    "build": "electron-builder",
+    "build:win": "electron-builder --win nsis",
+    "build:win-portable": "electron-builder --win portable"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
@@ -15,12 +19,16 @@
     "socket.io": "^4.8.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
     "electron": "^41.1.0",
     "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.medialayers.app",
     "productName": "MediaLayers",
+    "asar": true,
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"

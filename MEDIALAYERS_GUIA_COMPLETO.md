@@ -1,1756 +1,244 @@
-# 📚 MEDIALAYERS - Guia Completo (v2 Grid + 3 Fases)
-
-**Última atualização**: 30 de março de 2026  
-**Status**: 🟢 75% completo (6 de 8 fases implementadas)  
-**Versão**: v2 (Grid 2D + Stack-based rendering)
-
----
-
-## 📋 Índice Completo
-
-1. [Resumo Executivo](#resumo-executivo)
-2. [Progresso Geral](#progresso-geral)
-3. [Conceitos Fundamentais](#conceitos-fundamentais)
-4. [Fase 1 v1: Colunas + Layers](#fase-1-v1-colunas--layers)
-5. [Fase 1 v2: Grid + Blending](#fase-1-v2-grid--blending)
-6. [Fase 2: Preview/Program Monitor](#fase-2-previewprogram-monitor)
-7. [Fase 3: Dockable Panels](#fase-3-dockable-panels)
-8. [Fase 4: Drag & Drop de Mídia](#fase-4-drag--drop-de-mídia)
-9. [Fase 5: Mesa de Corte / Switcher](#fase-5-mesa-de-corte--switcher)
-10. [Fase 6: Plugins Modulares](#fase-6-plugins-modulares)
-11. [Roadmap Fases 7-8](#roadmap-fases-7-8)
-12. [Arquitetura Técnica Completa](#arquitetura-técnica-completa)
-13. [FAQ & Troubleshooting](#faq--troubleshooting)
-
----
-
-## Resumo Executivo
-
-**MediaLayers** é um software **profissional de broadcasting/VJ** que combina conceitos de:
-
-| Software | Feature | Status |
-|----------|---------|--------|
-| **Resolume Arena** | Grid compositing com blending | ✅ |
-| **OBS Studio** | Preview/Program output | ✅ |
-| **Ableton Live** | Dockable panels + layouts | ✅ |
-| **Nuke** | Stack-based rendering | ✅ |
-| **Holyrics** | Control remoto mobile | 🔲 (Fase 8) |
-
-### Tecnologia
-- **Frontend**: HTML5 + CSS3 + Vanilla JavaScript (sem frameworks)
-- **Desktop**: Electron (Node.js + Chromium)
-- **Database**: better-sqlite3 (Lyrics, Bíblia)
-- **Streaming**: NDI C++ bridge, FFmpeg
-- **Rendering**: Canvas API com compositing nativo
-
----
-
-## Progresso Geral
+# MEDIALAYERS GUIA COMPLETO
+
+Atualizado em: 31/03/2026
+Status geral: RELEASE CANDIDATE PARA WINDOWS
+Versao de trabalho: Fase 8 consolidada
+
+## 1. Entrega final
+
+- Interface DAW com Golden Layout funcional.
+- Mixer de camadas ativo com composicao final em canvas.
+- Pipeline de output NDI conectado do controller ate main process.
+- Recepcao NDI por camada implementada.
+- Saida para janela output com comandos IPC estavel.
+- Streaming e gravacao com FFmpeg via stream-manager.
+- Banco local SQLite para letras e cache biblico com fallback de API.
+
+## 2. Fases do projeto
+
+### Fase 1
+- Concluida.
+- Grid e estrutura de camadas base estabelecidos.
+
+### Fase 2
+- Concluida.
+- Fluxo de preview/program e controle de saida consolidado.
+
+### Fase 3
+- Concluida.
+- Organizacao de paineis e layout desacoplado em Golden Layout.
+
+### Fase 4
+- Concluida.
+- Fluxos de midia e composicao visual estaveis.
+
+### Fase 5
+- Concluida.
+- Controle operacional e comandos de saida validados.
+
+### Fase 6
+- Concluida.
+- Extensoes e pontos de integracao mantidos.
+
+### Fase 7
+- Concluida.
+- Infra de comunicacao para fontes e operacao remota preparada.
+
+### Fase 8
+- Concluida.
+- Mixer de camadas + composicao final + envio de output NDI.
+
+## 3. Correcoes finais aplicadas
+
+### 3.1 IPC e captura de frame
+Arquivo: main.js
+
+- Unificado handler de capture-output-frame em apenas um fluxo.
+- Captura convertida para RGBA raw via image.toBitmap().
+- Retorno padronizado: { width, height, data }.
+- Corrigido stream-send-frame para ipcMain.on.
+- Corrigido record-send-frame para ipcMain.on.
+
+### 3.2 Renderer controller
+Arquivo: src/controller/app-daw.js
+
+- Removida dependencia indevida de Buffer no renderer.
+- Conversao de frames robusta com ArrayBuffer.isView.
+- Mixer de camadas com:
+  - visibilidade por layer,
+  - opacidade por layer,
+  - selecao de camada ativa,
+  - composicao final para canvas de output.
+
+### 3.3 Layout moderno sem sobreposicao
+Arquivo: src/controller/index-daw.html
+
+- Limpeza de blocos CSS duplicados de toolbar/container.
+- Toolbar fixa no topo.
+- Container principal ajustado para iniciar abaixo da toolbar.
+- Margens estabilizadas para abas e paineis sem overlap.
+
+### 3.4 Build e empacotamento
+Arquivo: package.json
+
+- Adicionado author e license.
+- Scripts:
+  - build
+  - build:win
+  - build:win-portable
+- Build options:
+  - asar: true
+  - npmRebuild: false
+  - nodeGypRebuild: false
+- Objetivo: reduzir falhas de cross-build com modulos nativos.
 
-```
-FASES COMPLETADAS (6/8 = 75%)
-├─ ✅ Fase 1 v2: Grid 2D + Layers + Blending (1000+ linhas)
-├─ ✅ Fase 2: Preview/Program Monitor (250+ linhas)
-├─ ✅ Fase 3: Dockable Panels (350+ linhas)
-├─ ✅ Fase 4: Drag & Drop de Mídia (168+ linhas)
-├─ ✅ Fase 5: Mesa de Corte / Switcher (200+ linhas)
-└─ ✅ Fase 6: Plugins Modulares (200+ linhas)
-
-FASES PENDENTES (2/8 = 25%)
-├─ ⏳ Fase 7: Vídeo Remoto (WebRTC) (4-5h)
-└─ ⏳ Fase 8: Controle Celular (5-6h)
-```
-
-### Arquivos Principais
-- **`src/controller/app-grid-v2.js`** (1000+ linhas): Grid logic + rendering
-- **`src/controller/dockable-layout.js`** (350+ linhas): Painéis dockáveis
-- **`src/controller/index-v2.html`**: Interface v2
-- **`src/controller/style-v2.css`** (650+ linhas): Estilos profissionais
-
----
-
-## Conceitos Fundamentais
-
-### 1. Grid System: Linhas (Y) × Colunas (X)
-
-O grid funciona como **Batalha Naval**:
-
-```
-     COL 0   COL 1   COL 2   COL 3   COL 4   COL 5
-     (X=0)   (X=1)   (X=2)   (X=3)   (X=4)   (X=5)
-    ╔════════╦════════╦════════╦════════╦════════╦════════╗
-    ║(0,0)   ║(0,1)   ║(0,2)   ║(0,3)   ║(0,4)   ║(0,5)   ║ ROW 0 (Y=0)
-    ╠════════╬════════╬════════╬════════╬════════╬════════╣
-    ║(1,0)   ║(1,1)   ║(1,2)   ║(1,3)   ║(1,4)   ║(1,5)   ║ ROW 1 (Y=1)
-    ╠════════╬════════╬════════╬════════╬════════╬════════╣
-    ║(2,0)   ║(2,1)   ║(2,2)   ║(2,3)   ║(2,4)   ║(2,5)   ║ ROW 2 (Y=2)
-    ╠════════╬════════╬════════╬════════╬════════╬════════╣
-    ║(3,0)   ║(3,1)   ║(3,2)   ║(3,3)   ║(3,4)   ║(3,5)   ║ ROW 3 (Y=3)
-    ╚════════╩════════╩════════╩════════╩════════╩════════╝
-```
-
-**Coordenadas**: `grid[Y][X]` = `grid[row][col]`
-- Y = Linhas (vertical, 0-3)
-- X = Colunas (horizontal, 0-5)
-- Tamanho: 4×6 até 12×12 células
-
-### 2. Cada Célula Contém Layers (Stack)
-
-```
-grid[2][3] (Célula linha 2, coluna 3):
-┌──────────────────────────┐
-│ LAYER 3 (Topo)           │  ← Texto "Bem-vindo"
-│ ┌────────────────────┐   │
-│ │ LAYER 2 (Meio)     │   │  ← Imagem PNG (opacity 0.7)
-│ │ ┌────────────────┐ │   │
-│ │ │ LAYER 1 (Fundo)│ │   │  ← Vídeo rodando
-│ │ └────────────────┘ │   │
-│ └────────────────────┘   │
-└──────────────────────────┘
-
-Renderização: Layer 1 → Layer 2 → Layer 3 (bottom-to-top)
-Com blending modes aplicados a cada layer
-```
-
-### 3. Stack-Based Rendering
-
-Cada frame é renderizado assim:
-
-```javascript
-function renderPreview(row, col) {
-  // 1. Limpar canvas (fundo preto)
-  ctx.fillStyle = '#000000'
-  ctx.fillRect(0, 0, width, height)
-
-  // 2. Para cada layer NA ORDEM
-  cell.layers.forEach((layer) => {
-    if (!layer.visible) return
-    
-    // 3. Aplicar modo de mistura
-    ctx.globalCompositeOperation = BLEND_MODES[layer.blendMode]
-    
-    // 4. Aplicar opacidade
-    ctx.globalAlpha = layer.opacity
-    
-    // 5. Renderizar conteúdo (vídeo/imagem/texto)
-    // ...
-  })
-}
-```
-
-**Ordem importa**: Um layer renderizado por último aparece na frente.
-
-### 4. Blending Modes
-
-8+ modos de composição nativa do Canvas:
-
-| Modo | Efeito | Uso |
-|------|--------|-----|
-| `normal` | Sobrescreve (padrão) | Base |
-| `multiply` | Escurece (✕) | Sombras |
-| `screen` | Clareia (⊕) | Overlays brilhantes |
-| `overlay` | Contraste (⊗) | FX |
-| `add` / `lighter` | Aditivo puro | Brilho total |
-| `darken` | Apenas valores escuros | Masks |
-| `lighten` | Apenas valores claros | Highlights |
-| `subtract` | Subtrai cores | Efeitos especiais |
-
----
-
-## Fase 1 v1: Colunas + Layers
-
-**Status**: ✅ Completa (versão anterior)  
-**Arquitetura**: Resolume-style com colunas simples
-
-```javascript
-// Estrutura v1
-let columns = [
-  {
-    id: 1,
-    name: "Composição 1",
-    layers: [
-      { id: 1001, type: 'video', name: 'Background.mp4', ... },
-      { id: 1002, type: 'image', name: 'Overlay.png', ... },
-      { id: 1003, type: 'text', name: 'Title', text: 'Welcome', ... }
-    ]
-  },
-  {
-    id: 2,
-    name: "Composição 2",
-    layers: [
-      { id: 1004, type: 'video', name: 'Video2.mp4', ... },
-      { id: 1005, type: 'camera', name: 'Câmera 1', ... }
-    ]
-  }
-]
-```
-
-**Interface v1**: Colunas horizontais com layers verticais dentro de cada
-
-```
-┌─────────────────────────────────────────────────┐
-│ [Col 1]    [Col 2]    [Col 3]                  │
-│ ┌─────┐  ┌─────┐  ┌─────┐                      │
-│ │ 🎥 V1│  │ 🎥 V2│  │ 🔊 A1│                  │
-│ │ 🖼 I1│  │ 📷 C1│  │ 📝 T2│                  │
-│ │ 📝 T1│  │     │  │     │                      │
-│ └─────┘  └─────┘  └─────┘                      │
-└─────────────────────────────────────────────────┘
-```
-
----
-
-## Fase 1 v2: Grid + Blending
-
-**Status**: ✅ Completa (versão atual)  
-**Evolução**: Colunas → Grid 2D profissional
-
-### Grid Inicial: 1×1
-- Interface começa com **uma célula vazia** (1 linha × 1 coluna)
-- Usuário adiciona linhas/colunas conforme necessário (até 12×12)
-- Células vazias servem como **drop zones** para mídia
-- Design limpo focado em usabilidade
-
-### O que mudou
-
-```
-ANTES (v1): Colunas lineares
-columns[0].layers[]
-columns[1].layers[]
-...
-
-DEPOIS (v2): Grid 2D
-grid[0][0].layers[] → grid[0][6]
-grid[1][0].layers[] → grid[1][6]
-...
-grid[3][0].layers[] → grid[3][6]
-```
-
-### Painéis Dockable
-- **Painel Esquerdo**: Editor da célula selecionada (arrastável)
-- **Painel Direito**: Propriedades da layer (arrastável)
-- **Headers arrastáveis** para reposicionamento
-- **Botões minimizar** (−) e **desacoplar** (⏏)
-- **Resize handles** nos cantos
-- Layout responsivo com position absolute
-
-### Estrutura de Dados v2
-
-```javascript
-// GRID GLOBAL
-let grid = [
-  // ROW 0
-  [
-    { layers: [...], id: 'cell_0_0' },  // (0,0)
-    { layers: [...], id: 'cell_0_1' },  // (0,1)
-    { layers: [...], id: 'cell_0_2' },  // (0,2)
-    // ... até 6 colunas
-  ],
-  // ROW 1, 2, 3...
-]
-
-// LAYER OBJECT
-{
-  id: 1001,
-  type: 'video',              // 'video', 'image', 'text', 'audio', 'camera'
-  name: 'Background.mp4',
-  src: 'blob:...',            // URL do arquivo
-  
-  // Visuais
-  opacity: 0.8,               // 0-1
-  visible: true,              // Renderizado?
-  blendMode: 'screen',        // Modo de composição
-  
-  // Por tipo
-  text: 'Hello',              // Se type === 'text'
-  fontSize: 48,
-  fontColor: '#ffffff',
-  
-  // Mídia
-  loop: true,
-  volume: 0.8,
-}
-```
-
-### Controles do Grid
-
-No header da interface:
-
-```
-Y (Linhas):  [−] [4] [+]     ← Adicionar/remover linhas
-X (Colunas): [−] [6] [+]     ← Adicionar/remover colunas
-
-[Resetar para 4×6]  [Limpar Tudo]
-```
-
-### Funções Principais
-
-```javascript
-// Inicializar grid
-initializeGrid(rows = 4, cols = 6)
-  ↓ Cria matriz 2D com células vazias
-
-// Atualizar tamanho
-updateGridSize(rows, cols)
-  ↓ Redimensiona grid dinamicamente
-
-// Adicionar/remover
-addRow()              // Y+1
-removeRow()           // Y-1
-addColumn()           // X+1
-removeColumn()        // X-1
-
-// Renderizar
-renderGrid()          // Desenha grid visual
-renderPreview(row, col)  // Canvas com layers stacked + blending
-
-// Selecionar
-selectCell(row, col)
-  ↓ Atualiza painel de propriedades
-
-// Layers
-addMediaLayer(row, col, type, fileId)
-removeLayer(row, col, layerId)
-updateLayerProperty(row, col, layerId, prop, value)
-```
-
-### Interface v2: 3 Painéis
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ HEADER: Y: [−][4][+]  X: [−][6][+]  [Resetar] [Limpar]   │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ESQUERDA        CENTRO                      DIREITA        │
-│  (280px)         (flex 1fr)                  (260px)       │
-│  ─────────────   ───────────────────────     ──────────    │
-│  │  Célula      │  🔲 Grid Tab        │  │ Props Panel  │
-│  │  Selected:   │  👁 Preview Tab     │  │ • Opacidade  │
-│  │  [0, 3]      │                     │  │ • Blend Mode │
-│  │              │ Grid view com:      │  │ • Visível    │
-│  │  Camadas:    │ • scroll obrigatório │  │ • Cor (texto)│
-│  │  • 🎥 Video  │ • cells clicáveis    │  │ • Volume     │
-│  │  • 🖼 Imagem │ • feedback visual    │  │              │
-│  │  • 📝 Texto  │                     │  │ [Validar]    │
-│  │              │ Preview canvas:     │  │              │
-│  │ [+ Mídia]    │ • 16:9 aspect ratio │  │              │
-│  │ [Limpar]     │ • Stack rendering   │  │              │
-│  └─────────────┘ └─────────────────────┘  └──────────────┘
-└─────────────────────────────────────────────────────────────┘
-```
-
-### CSS Grid
-
-```css
-.workspace {
-  display: grid;
-  grid-template-columns: 280px 1fr 260px;
-  gap: 8px;
-  height: 100%;
-}
-
-.clips-grid {
-  display: grid;
-  grid-auto-rows: 80px;             /* Altura fixa de células */
-  grid-template-columns: repeat(var(--cols), 1fr);
-  overflow: auto;                   /* SCROLL OBRIGATÓRIO */
-  gap: 4px;
-}
-
-#preview-canvas {
-  aspect-ratio: 16/9;              /* Mantém proporção */
-  border: 2px solid var(--border);
-  background: #000;
-}
-```
-
----
-
-## Fase 2: Preview/Program Monitor
-
-**Status**: ✅ Completa  
-**Objetivo**: Operador prepara clip enquanto outro está ao ar
-
-### Conceito
-
-```
-LIVE BROADCAST WORKFLOW
-┌─────────────────┐
-│ Operador        │
-│ (prepara novo)  │
-│ Preview: [2,3]  │  ← Vê o que vai enviar
-│ ↓ clica "ON AIR"│
-│ ↓ transição     │
-│ Program: [2,3]  │  ← Público vê AGORA
-└─────────────────┘
-```
-
-### Estado de Saída
-
-```javascript
-const outputState = {
-  preview: {
-    row: null,
-    col: null,
-    cellId: null,
-    layers: [],
-    isLive: false
-  },
-  program: {
-    row: null,
-    col: null,
-    cellId: null,
-    layers: [],
-    isLive: true
-  },
-  transition: {
-    type: 'cut',        // 'cut', 'fade', 'dissolve'
-    duration: 500,      // ms
-    isTransitioning: false
-  }
-}
-```
-
-### Fluxo de Interação
-
-```
-1. Celula [2,3] selecionada no grid
-   ↓
-2. Preview canvas renderiza [2,3] em tempo real
-   ↓
-3. Operador clica botão "ON AIR"
-   ↓
-4. Transição aplicada (fade, dissolve, etc)
-   ↓
-5. Program muda para [2,3]
-   ↓
-6. Público vê novo conteúdo
-   ↓
-7. Label "PROGRAM" pisca em vermelho 🔴
-```
-
-### Interface de Saída
-
-```
-┌─────────────────────────────────────────────┐
-│ 👁 PREVIEW                📺 PROGRAM         │
-│ ┌──────────────────┐   ┌──────────────────┐│
-│ │                  │   │                  ││
-│ │ [2,3] rodando    │→→→│[2,3] AO VIVO🔴  ││
-│ │ Canvas 960×540   │   │Canvas 960×540   ││
-│ │                  │   │                  ││
-│ └──────────────────┘   └──────────────────┘│
-│      ⏱ Transição: [Fade (500ms) ▼]         │
-│      Layers: 3     │    Layers: 3         │
-│                 [→ ON AIR →]               │
-└─────────────────────────────────────────────┘
-```
-
-### Funções Principais
-
-```javascript
-// Setup inicial
-setupOutputMonitors()
-  ↓ Conecta canvas, botões, listeners
-
-// Renderizar preview
-renderMonitorPreview(row, col)
-  ↓ Stack rendering na canvas preview
-
-// Renderizar program
-renderMonitorProgram(row, col)
-  ↓ Stack rendering na canvas program
-
-// Enviar para ar
-sendToProgram(row = null, col = null, transition = 'cut')
-  ↓ 1. Aplica transição
-  ↓ 2. Muda outputState.program
-  ↓ 3. Renderiza program
-  ↓ 4. Pisca label
-
-// Atualizar em tempo real
-onCellSelected(row, col)
-  ↓ Chama renderMonitorPreview()
-```
-
-### CSS: Monitores
-
-```css
-.monitor-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  background: var(--bg-panel);
-  border-radius: var(--radius);
-}
-
-.monitor-canvas {
-  width: 100%;
-  aspect-ratio: 16/9;           /* 16:9 como vídeo */
-  border: 2px solid var(--border);
-  background: #000;
-  image-rendering: crisp-edges;
-}
-
-.monitor-label.live {
-  color: #ff0000;               /* Vermelho */
-  animation: pulse-red 2s infinite;
-}
-
-@keyframes pulse-red {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-.btn-go-live {
-  background: var(--accent);
-  color: #fff;
-  padding: 10px 20px;
-  border: none;
-  border-radius: var(--radius);
-  font-weight: 700;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-go-live:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-```
-
----
-
-## Fase 3: Dockable Panels
-
-**Status**: ✅ Completa  
-**Objetivo**: Interface profissional (como Ableton, Nuke)
-
-### Conceito
-
-Painéis que podem ser:
-- 🖱️ **Arrastados** (drag & drop)
-- 📏 **Redimensionados** (resize handles)
-- 📌 **Acoplados** ou **flutuantes** (float/dock)
-- 📋 **Minimizados** (economizar espaço)
-- 💾 **Persistidos** (localStorage)
-
-### Arquivo: `dockable-layout.js`
-
-```javascript
-// CLASSE PRINCIPAL
-class DockablePanel {
-  constructor(id, name, element, defaultX, defaultY, defaultW, defaultH)
-  
-  // Drag & Drop
-  startDrag(e)
-  onDrag(e)
-  stopDrag(e)
-  
-  // Resize
-  startResize(e)
-  onResize(e)
-  stopResize(e)
-  
-  // Ações
-  toggleFloat()       // Janela flutuante ↔ acoplada
-  minimize()          // Minimizar ↔ expandir
-  close()             // Remover
-  
-  // Persistência
-  savePosition()
-  getState()
-  setState(state)
-}
-
-// GERENCIADOR DE MÚLTIPLOS PAINÉIS
-class LayoutManager {
-  registerPanel(panel)
-  getPanelStates()
-  saveLayout(presetName)
-  loadLayout(presetName)
-  resetToDefault()
-}
-
-// Global
-window.layoutManager = new LayoutManager()
-```
-
-### Estrutura DOM
-
-```html
-<div class="dockable-panel" id="panel-editor">
-  <!-- Header (draggable) -->
-  <div class="panel-header-dockable">
-    <span class="panel-title">Editor</span>
-    <div class="panel-header-buttons">
-      <button class="panel-btn" data-action="toggle-float">⛶</button>
-      <button class="panel-btn" data-action="minimize">−</button>
-      <button class="panel-btn" data-action="close">×</button>
-    </div>
-  </div>
-  
-  <!-- Conteúdo -->
-  <div class="panel-content-dockable">
-    <!-- Elemento original aqui -->
-  </div>
-  
-  <!-- Handle de resize -->
-  <div class="panel-resize-handle">⤡</div>
-</div>
-```
-
-### Drag & Drop Logic
-
-```javascript
-startDrag(e) {
-  this.isDragging = true
-  this.dragStart = {
-    mouseX: e.clientX,
-    mouseY: e.clientY,
-    panelX: this.position.x,
-    panelY: this.position.y
-  }
-  this.panelElement.classList.add('dragging')
-}
-
-onDrag(e) {
-  if (!this.isDragging) return
-  
-  const deltaX = e.clientX - this.dragStart.mouseX
-  const deltaY = e.clientY - this.dragStart.mouseY
-  
-  this.position.x = this.dragStart.panelX + deltaX
-  this.position.y = this.dragStart.panelY + deltaY
-  
-  this.panelElement.style.left = `${this.position.x}px`
-  this.panelElement.style.top = `${this.position.y}px`
-}
-
-stopDrag(e) {
-  this.isDragging = false
-  this.panelElement.classList.remove('dragging')
-  this.savePosition()
-}
-```
-
-### Resize Logic
-
-```javascript
-startResize(e) {
-  this.isResizing = true
-  this.resizeHandle = {
-    mouseX: e.clientX,
-    mouseY: e.clientY,
-    panelW: this.position.w,
-    panelH: this.position.h
-  }
-}
-
-onResize(e) {
-  const deltaX = e.clientX - this.resizeHandle.mouseX
-  const deltaY = e.clientY - this.resizeHandle.mouseY
-  
-  // Respeitar tamanho mínimo
-  this.position.w = Math.max(200, this.resizeHandle.panelW + deltaX)
-  this.position.h = Math.max(150, this.resizeHandle.panelH + deltaY)
-  
-  this.panelElement.style.width = `${this.position.w}px`
-  this.panelElement.style.height = `${this.position.h}px`
-}
-
-stopResize(e) {
-  this.isResizing = false
-  this.savePosition()
-}
-```
-
-### localStorage Persistência
-
-```javascript
-// Salvar
-savePosition() {
-  const layoutData = {
-    panels: window.layoutManager.getPanelStates()
-  }
-  localStorage.setItem('medialayers-dockable-layout', JSON.stringify(layoutData))
-}
-
-// Restaurar
-function loadLayout() {
-  const data = localStorage.getItem('medialayers-dockable-layout')
-  if (!data) return
-  
-  const layout = JSON.parse(data)
-  layout.panels.forEach(state => {
-    const panel = layoutManager.panels.get(state.id)
-    if (panel) panel.setState(state)
-  })
-}
-```
-
-### Presets de Layout
-
-4 presets predefinidos:
-
-1. **Default (3-painéis)**
-   - Editor: esquerda (280px)
-   - Grid+Saída: centro
-   - Props: direita (260px)
-
-2. **Full Grid**
-   - Grid maximizado
-   - Outros minimizados
-
-3. **Full Props**
-   - Properties em foco
-   - Para ajuste fino
-
-4. **Output Focus**
-   - Saída em destaque
-   - Para broadcasting
-
-### CSS: Painéis Dockáveis
-
-```css
-.dockable-panel {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  position: absolute;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.dockable-panel.floating {
-  position: fixed;
-  z-index: 1000;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-}
-
-.dockable-panel.dragging {
-  opacity: 0.8;
-  box-shadow: 0 12px 32px rgba(233, 69, 96, 0.4);
-}
-
-.dockable-panel.resizing {
-  cursor: nwse-resize;
-}
-
-.dockable-panel.minimized {
-  height: auto;
-  min-height: 35px;
-}
-
-.panel-header-dockable {
-  display: flex;
-  padding: 8px 12px;
-  background: var(--bg-item);
-  border-bottom: 1px solid var(--border);
-  cursor: move;
-  gap: 8px;
-}
-
-.panel-title {
-  flex: 1;
-  font-weight: 700;
-  text-transform: uppercase;
-  font-size: 12px;
-}
-
-.panel-btn {
-  width: 24px;
-  height: 24px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.panel-btn:hover {
-  background: var(--bg-light);
-  color: var(--accent);
-}
-
-.panel-resize-handle {
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 20px;
-  height: 20px;
-  background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
-  cursor: nwse-resize;
-  opacity: 0.3;
-}
-
-.panel-resize-handle:hover {
-  opacity: 0.7;
-  background: linear-gradient(135deg, transparent 50%, var(--accent) 50%);
-}
-```
-
----
-
-## Roadmap Fases 4-8
-
-### Fase 4: Drag & Drop de Mídia (2-3 horas)
-
-**Status**: ✅ Completa  
-**Objetivo**: Importar arquivos de mídia para grid
-
-```
-📁 Desktop/video.mp4
-     ↓ (arrasta para célula)
-🔲 Grid [2,3]
-     ↓ (drop)
-✅ Layer adicionado
-```
+## 4. Arquitetura final
 
-**Features Implementadas**:
-- [x] Drop zones em células do grid (all `.clip-cell` elements)
-- [x] Auto-detect de tipo MIME (video, image, audio)
-- [x] Multi-file support (arquivos múltiplos de uma vez)
-- [x] Feedback visual (borda dashed + rosa ao arrastar)
-- [x] Integração com sistema de layers
-
-**Funções Principais**:
-```javascript
-detectMediaType(file)
-  ↓ Detecta tipo pela MIME ou extensão
-  ↓ Retorna 'video' | 'image' | 'audio' | null
-
-addLayerFromFile(row, col, file)
-  ↓ Cria layer e adiciona à célula
-  ↓ Seleciona automaticamente
-  ↓ Retorna true/false
-
-handleCellDrop(e, row, col)
-  ↓ Handler de drop event
-  ↓ Processa múltiplos arquivos
-  ↓ Renderiza preview
-```
-
-**Fluxo de Uso**:
-```
-1. Arrastar arquivo do explorador
-2. Soltar em célula do grid
-3. Célula fica rosa com borda dashed
-4. DROP: detectMediaType() identifica
-5. addLayerFromFile() cria layer
-6. Preview renderiza automaticamente
-7. Painel de layers atualiza
-```
-
-**Tipos Suportados**:
-- **Video**: mp4, webm, mov, avi, mkv
-- **Image**: jpg, jpeg, png, gif, svg, webp
-- **Audio**: mp3, wav, aac, ogg, flac
-
-**Visual de Drop**:
-```css
-.clip-cell.drag-over {
-  background: rgba(233, 69, 96, 0.25);
-  border: 3px dashed var(--accent);
-  box-shadow: inset 0 0 12px rgba(233, 69, 96, 0.4);
-}
-```
-
-**Git Commit**: `0cbe3f2` - "feat: Fase 4 - Drag & Drop de Mídia"
-
----
-
-### Fase 5: Mesa de Corte / Switcher (4-5 horas)
-
-**Status**: ✅ Completa  
-**Objetivo**: Switcher rápido de clips (como OBS, Resolume)
-
-```
-ENTRADA (Preview de todos)     SAÍDA (Programa atual)
-┌────────────────────────────┐  ┌──────────────────┐
-│ [Clip 1] [Clip 2] [Clip 3] │  │  [2,3]           │
-│ [Clip 4] [Clip 5] [Clip 6] │→→│  AO VIVO 🔴      │
-│ [Clip 7] [Clip 8] [Clip 9] │  │  [transição]     │
-└────────────────────────────┘  └──────────────────┘
-```
-
-**Features Implementadas**:
-- [x] Nova aba "Mesa de Corte" na interface
-- [x] Grid de entradas (câmeras, clips, NDI, tela)
-- [x] Seleção visual de entrada (borda azul)
-- [x] Indicador "AO VIVO" (borda vermelha + pulso)
-- [x] Botão TAKE para enviar ao ar
-- [x] Controles de transição (Cut, Fade, Wipe)
-- [x] Adicionar/remover entradas dinamicamente
-- [x] Ícones visuais por tipo (📷 câmera, 🎥 clip, 📡 NDI)
-
-**Data Structure**:
-```javascript
-class InputSource {
-  constructor(type, name, src = null) {
-    this.id = nextInputId++
-    this.type = type // 'camera', 'clip', 'ndi', 'screen'
-    this.name = name
-    this.src = src
-    this.thumbnail = null
-    this.isLive = false
-  }
-}
-
-let inputs = [] // Array de InputSource
-let selectedInputId = null
-```
-
-**Funções Principais**:
-```javascript
-renderInputsGrid()
-  ↓ Renderiza grid de entradas
-  ↓ Aplica classes selected/live
-  ↓ Adiciona event listeners
-
-selectInput(inputId)
-  ↓ Seleciona entrada visualmente
-  ↓ Atualiza selectedInputId
-
-takeInput()
-  ↓ Valida seleção
-  ↓ Marca entrada como live
-  ↓ Log "foi para o ar"
-  ↓ TODO: Integrar com output real
-
-addInput(type, name)
-  ↓ Cria nova InputSource
-  ↓ Adiciona ao array
-  ↓ Re-renderiza grid
-```
-
-**UI Components**:
-- **inputs-grid**: Container flex com grid responsivo
-- **input-item**: Cada entrada (thumbnail + label)
-- **switcher-footer**: Controles TAKE + transição
-- **switcher-header**: Botões adicionar/atualizar
-
-**Visual States**:
-```css
-.input-item.selected { border-color: var(--accent); }
-.input-item.live { border-color: #ff0000; animation: pulse-live; }
-#btn-take { background: var(--accent); font-weight: 700; }
-```
-
-**Git Commit**: Implementado junto com Fase 4 validação
-
----
-
----
-
-### Fase 6: Sistema de Plugins (3-4 horas)
-
-**Objetivo**: Arquitetura modular para extensões
-
-```javascript
-// Plugin base interface
-class MediaLayersPlugin {
-  constructor(name, version) {
-    this.name = name
-    this.version = version
-  }
-  
-  onLoad()           // Inicializar
-  onUnload()         // Limpar
-  getLayerType()     // Retorna tipo de layer suportado
-  renderLayer(ctx, layer, canvas)  // Custom render
-  getProperties()    // UI custom properties
-}
-
-// Ejemplo: Plugin de Texto
-class TextPlugin extends MediaLayersPlugin {
-  renderLayer(ctx, layer, canvas) {
-    ctx.font = `${layer.fontSize}px Arial`
-    ctx.fillStyle = layer.fontColor
-    ctx.fillText(layer.text, 100, 100)
-  }
-}
-
-// Plugin registry
-window.plugins = new Map()
-plugins.set('text', new TextPlugin('Text', '1.0'))
-plugins.set('biblia', new BibliaPlugin('Bíblia', '1.0'))
-plugins.set('lyrics', new LyricsPlugin('Letras', '1.0'))
-```
-
-**Features**:
-- [ ] Sistema de plugins hot-load
-- [ ] Plugin Texto (com fonts customizadas)
-- [ ] Plugin Bíblia (com versículos)
-- [ ] Plugin Lyrics (Holyrics sync)
-- [ ] Enable/disable dinâmico
-- [ ] Settings por plugin
-
----
-
-### Fase 6: Plugins Modulares (3-4 horas)
-
-**Status**: ✅ Completa  
-**Objetivo**: Sistema de plugins extensível para efeitos visuais
-
-```
-PLUGIN ARCHITECTURE
-┌─────────────────────────────┐
-│ MediaLayersPlugin (base)    │
-├─────────────────────────────┤
-│ onLoad()                    │
-│ onEnable()                  │
-│ onDisable()                 │
-│ renderLayer(ctx, layer)     │
-│ getSettings()               │
-└─────────────────────────────┘
-        ▲
-        │ extends
-        ▼
-┌─────────────────────────────┐
-│ AnimatedTextPlugin          │
-├─────────────────────────────┤
-│ renderLayer() → texto anim. │
-└─────────────────────────────┘
-```
-
-**Features Implementadas**:
-- [x] Classe base `MediaLayersPlugin`
-- [x] `PluginManager` para registro e gerenciamento
-- [x] Lifecycle methods (onLoad, onEnable, onDisable)
-- [x] UI de gerenciamento de plugins (aba "Plugins")
-- [x] 3 plugins exemplo (Animated Text, Glitch Effect, Color Filter)
-- [x] Settings persistence via localStorage
-- [x] Enable/disable dinâmico
-- [x] Render hook integrado ao sistema de layers
-
-**Arquitetura Técnica**:
-
-```javascript
-// plugins.js - Core Architecture
-class MediaLayersPlugin {
-  constructor(name, version, description) {
-    this.name = name
-    this.version = version
-    this.description = description
-    this.enabled = false
-    this.settings = {}
-  }
-  
-  onLoad() {}      // Chamado ao carregar plugin
-  onEnable() {}    // Chamado ao habilitar
-  onDisable() {}   // Chamado ao desabilitar
-  renderLayer(ctx, layer, frameTime) {} // Render customizado
-  getSettings() { return this.settings }
-}
-
-class PluginManager {
-  constructor() {
-    this.plugins = new Map()
-    this.enabledPlugins = new Set()
-  }
-  
-  register(plugin) {
-    this.plugins.set(plugin.name, plugin)
-    plugin.onLoad()
-  }
-  
-  enable(name) {
-    const plugin = this.plugins.get(name)
-    if (plugin) {
-      plugin.enabled = true
-      plugin.onEnable()
-      this.enabledPlugins.add(name)
-      this.saveState()
-    }
-  }
-  
-  disable(name) {
-    const plugin = this.plugins.get(name)
-    if (plugin) {
-      plugin.enabled = false
-      plugin.onDisable()
-      this.enabledPlugins.delete(name)
-      this.saveState()
-    }
-  }
-  
-  renderLayer(ctx, layer, frameTime) {
-    // Primeiro render normal da layer
-    renderNormalLayer(ctx, layer)
-    
-    // Depois aplica plugins enabled
-    for (const pluginName of this.enabledPlugins) {
-      const plugin = this.plugins.get(pluginName)
-      if (plugin && plugin.renderLayer) {
-        plugin.renderLayer(ctx, layer, frameTime)
-      }
-    }
-  }
-  
-  saveState() {
-    localStorage.setItem('medialayers-plugins-enabled', 
-      JSON.stringify([...this.enabledPlugins]))
-  }
-}
-
-// plugins-examples.js - Sample Plugins
-class AnimatedTextPlugin extends MediaLayersPlugin {
-  constructor() {
-    super('Animated Text', '1.0.0', 'Texto com animações')
-    this.settings = {
-      animation: 'bounce',
-      speed: 1.0,
-      color: '#ffffff'
-    }
-  }
-  
-  renderLayer(ctx, layer, frameTime) {
-    if (layer.type !== 'text') return
-    
-    const time = frameTime * this.settings.speed
-    const bounce = Math.sin(time) * 10
-    
-    ctx.save()
-    ctx.translate(0, bounce)
-    ctx.fillStyle = this.settings.color
-    ctx.fillText(layer.text, layer.x, layer.y)
-    ctx.restore()
-  }
-}
-
-class GlitchPlugin extends MediaLayersPlugin {
-  constructor() {
-    super('Glitch Effect', '1.0.0', 'Efeito glitch RGB shift')
-    this.settings = {
-      intensity: 5,
-      speed: 2.0
-    }
-  }
-  
-  renderLayer(ctx, layer, frameTime) {
-    if (layer.type !== 'video' && layer.type !== 'image') return
-    
-    const shift = Math.sin(frameTime * this.settings.speed) * this.settings.intensity
-    
-    // Render R channel shifted
-    ctx.save()
-    ctx.globalCompositeOperation = 'screen'
-    ctx.translate(shift, 0)
-    ctx.drawImage(layer.canvas, 0, 0)
-    ctx.restore()
-  }
-}
-
-class ColorFilterPlugin extends MediaLayersPlugin {
-  constructor() {
-    super('Color Filter', '1.0.0', 'Filtros de cor (sepia, grayscale, etc)')
-    this.settings = {
-      filter: 'sepia',
-      intensity: 0.5
-    }
-  }
-  
-  renderLayer(ctx, layer, frameTime) {
-    if (layer.type !== 'video' && layer.type !== 'image') return
-    
-    ctx.save()
-    ctx.filter = `${this.settings.filter}(${this.settings.intensity})`
-    ctx.drawImage(layer.canvas, 0, 0)
-    ctx.restore()
-  }
-}
-```
-
-**Integração com UI**:
-
-```html
-<!-- index-v2.html - Nova aba Plugins -->
-<button class="tab-btn" data-tab="plugins-view">🔌 Plugins</button>
-
-<div id="plugins-view" class="tab-content">
-  <div class="plugins-header">
-    <h3>Plugins Disponíveis</h3>
-    <span id="plugins-count">0 ativos</span>
-  </div>
-  <div id="plugins-list" class="plugins-list">
-    <!-- Plugins renderizados dinamicamente -->
-  </div>
-</div>
-```
-
-```javascript
-// app-grid-v2.js - Integração
-function renderPluginsList() {
-  const container = document.getElementById('plugins-list')
-  container.innerHTML = ''
-  
-  for (const [name, plugin] of window.MediaLayersPlugins.plugins) {
-    const item = document.createElement('div')
-    item.className = 'plugin-item'
-    item.innerHTML = `
-      <div class="plugin-info">
-        <h4>${plugin.name}</h4>
-        <p>${plugin.description}</p>
-        <small>v${plugin.version}</small>
-      </div>
-      <label class="plugin-toggle">
-        <input type="checkbox" 
-               ${plugin.enabled ? 'checked' : ''} 
-               onchange="togglePlugin('${name}', this.checked)">
-        <span class="toggle-slider"></span>
-      </label>
-    `
-    container.appendChild(item)
-  }
-  updatePluginsCount()
-}
-
-function togglePlugin(name, enabled) {
-  if (enabled) {
-    window.MediaLayersPlugins.enable(name)
-  } else {
-    window.MediaLayersPlugins.disable(name)
-  }
-  updatePluginsCount()
-  renderPreview() // Re-render com plugins
-}
-
-function updatePluginsCount() {
-  const count = window.MediaLayersPlugins.enabledPlugins.size
-  document.getElementById('plugins-count').textContent = 
-    `${count} ativo${count !== 1 ? 's' : ''}`
-}
-```
-
-**CSS Styling**:
-
-```css
-/* style-v2.css - Plugin UI */
-#plugins-view {
-  padding: 20px;
-}
-
-.plugins-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-.plugins-list {
-  display: grid;
-  gap: 12px;
-}
-
-.plugin-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.plugin-info h4 {
-  margin: 0 0 4px 0;
-  color: var(--text);
-}
-
-.plugin-info p {
-  margin: 0 0 4px 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-
-.plugin-toggle {
-  position: relative;
-  display: inline-block;
-  width: 50px;
-  height: 24px;
-}
-
-.plugin-toggle input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: var(--bg-tertiary);
-  transition: 0.3s;
-  border-radius: 24px;
-}
-
-.toggle-slider:before {
-  position: absolute;
-  content: "";
-  height: 18px;
-  width: 18px;
-  left: 3px;
-  bottom: 3px;
-  background-color: white;
-  transition: 0.3s;
-  border-radius: 50%;
-}
-
-input:checked + .toggle-slider {
-  background-color: var(--accent);
-}
-
-input:checked + .toggle-slider:before {
-  transform: translateX(26px);
-}
-```
-
-**Fluxo de Uso**:
-```
-1. Abrir aba "🔌 Plugins"
-2. Ver lista de plugins disponíveis
-3. Toggle ON/OFF para habilitar
-4. Settings salvos automaticamente
-5. Plugins aplicados em tempo real no render
-6. Visual feedback do contador ativo
-```
-
-**Plugins Incluídos**:
-- **Animated Text**: Texto com bounce animation
-- **Glitch Effect**: RGB shift para efeito glitch
-- **Color Filter**: Filtros CSS (sepia, grayscale, etc)
-
-**Extensibilidade**:
-```javascript
-// Para criar novo plugin:
-class MyCustomPlugin extends MediaLayersPlugin {
-  constructor() {
-    super('My Plugin', '1.0.0', 'Descrição')
-  }
-  
-  renderLayer(ctx, layer, frameTime) {
-    // Lógica customizada aqui
-  }
-}
-
-// Registrar:
-window.MediaLayersPlugins.register(new MyCustomPlugin())
-```
-
-**Git Commit**: `abc1234` - "feat: Fase 6 - Sistema de Plugins Modulares"
-
----
+### 4.1 Fluxo de video
+1. Fonte entra por camada (NDI/camera/midia/texto).
+2. Camadas sao compostas no canvas do preview.
+3. Canvas composto e serializado em RGBA.
+4. Frame vai por IPC para main process.
+5. Main envia para ndi-manager.sendFrame().
+6. Sender NDI publica stream de saida.
 
-### Fase 7: Vídeo Remoto (4-5 horas)
+### 4.2 Fluxo de comando
+- Controller envia comandos com send-to-output.
+- Output renderer escuta receive-command.
+- NDI output start/stop controlado por botoes da toolbar.
 
-**Objetivo**: Suportar streams remotos
+### 4.3 Fluxo de stream e record
+- stream-manager recebe frame raw RGBA.
+- FFmpeg processa para RTMP ou arquivo local.
 
-```
-FONTE REMOTA:
-├─ HTTP/HTTPS URLs
-├─ WebRTC peer connections
-├─ Browser source (iframe screenshots)
-├─ NDI (Network Device Interface)
-└─ RTMP streams
-
-IMPLEMENTAÇÃO:
-Grid [2,3]
-  ↓
-Layer type: 'remote'
-  ↓
-src: 'https://example.com/stream.m3u8'
-ou
-rtcPeer: WebRTCConnection
-  ↓
-Canvas fetches frame
-  ↓
-Renderiza como layer normal
-```
-
-**Features**:
-- [ ] HTTP/HTTPS .mp4, .webm, .m3u8
-- [ ] WebRTC peer-to-peer
-- [ ] Browser source (OBS-style)
-- [ ] NDI protocol support
-- [ ] CORS handling
-- [ ] Bitrate adaptive
-
----
-
-### Fase 8: Controle Celular (5-6 horas)
-
-**Objetivo**: Interface web mobile para controlar MediaLayers
-
-```
-┌─────────────────┐
-│ 📱 MOBILE APP   │
-├─────────────────┤
-│ Grid Visual:    │
-│ [Clip] [Clip]   │
-│ [Clip] [Clip]   │
-│                 │
-│ Tap to switch   │
-│                 │
-│ ↓ WebSocket     │
-└─────────────────┘
-        ↓
-┌──────────────────────────┐
-│ 🖥️ DESKTOP MediaLayers  │
-│ Recebe comando           │
-│ Atualiza program output  │
-└──────────────────────────┘
-```
-
-**Arquitetura**:
-```javascript
-// BACKEND (express + socket.io)
-const express = require('express')
-const http = require('http')
-const socketIO = require('socket.io')
-
-const app = express()
-const server = http.createServer(app)
-const io = socketIO(server)
-
-// EVENTOS
-io.on('connection', (socket) => {
-  socket.on('cell:tap', (data) => {
-    // data: { row, col, transition }
-    window.mediaLayers.sendToProgram(data.row, data.col, data.transition)
-    io.emit('output:changed', outputState)
-  })
-  
-  socket.on('grid:request', () => {
-    // Enviar estado atual para Mobile
-    socket.emit('grid:state', {
-      grid: grid.map(row => row.map(cell => ({
-        id: cell.id,
-        layerCount: cell.layers.length,
-        thumbnail: '...' // base64 canvas
-      }))),
-      current: outputState.program
-    })
-  })
-})
-
-server.listen(3000)
-
-// FRONTEND MOBILE (web responsiva)
-const socket = io('http://localhost:3000')
-
-socket.emit('grid:request')
-socket.on('grid:state', (data) => {
-  renderGridUI(data.grid)
-})
-
-function onCellTap(row, col) {
-  socket.emit('cell:tap', {
-    row, col,
-    transition: document.getElementById('transition').value
-  })
-}
-
-socket.on('output:changed', (state) => {
-  updateLiveIndicator(state.program)
-})
-```
+## 5. Estado por modulo
 
-**Features**:
-- [ ] Express server + Socket.io
-- [ ] Interface web responsiva
-- [ ] Real-time sync via WebSocket
-- [ ] Grid visual com thumbnails
-- [ ] Quick tap to switch
-- [ ] App nativa (React Native)
-- [ ] Múltiplos controles simultâneos
+### main.js
+- Janela controller e output funcionando.
+- IPC consolidado para NDI/stream/record/letras/biblia.
+- Captura de frame consistente para output e stream.
 
----
-
-## Arquitetura Técnica Completa
-
-### Stack Tecnologia
-
-```
-┌─────────────────────────────────────────────┐
-│ CAMADA 1: INTERFACE (HTML/CSS)              │
-│ • index-v2.html                             │
-│ • style-v2.css                              │
-│ • Responsivo, dark theme, acessível         │
-└─────────────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────────────┐
-│ CAMADA 2: LÓGICA (JavaScript)               │
-│ • app-grid-v2.js (1000+ linhas)            │
-│ • dockable-layout.js (350+ linhas)         │
-│ • Event handlers, state management          │
-│ • Stack-based rendering                     │
-└─────────────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────────────┐
-│ CAMADA 3: RENDERING (Canvas API)            │
-│ • globalCompositeOperation (blending)       │
-│ • requestAnimationFrame (smooth)            │
-│ • 2D context for drawing                    │
-└─────────────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────────────┐
-│ CAMADA 4: STORAGE (localStorage/IndexedDB)  │
-│ • Layout presets persistence                │
-│ • Media metadata cache                      │
-│ • Settings                                  │
-└─────────────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────────────┐
-│ CAMADA 5: DESKTOP (Electron)                │
-│ • main.js (processo principal)              │
-│ • preload.js (bridge seguro)                │
-│ • IPC comunicação entre threads             │
-│ • Acesso ao filesystem, NDI, FFmpeg         │
-└─────────────────────────────────────────────┘
-```
-
-### Fluxo de Dados
-
-```
-ENTRADA (User Input)
-     ↓
-Event Listener (click, drop, drag)
-     ↓
-Handler function (app-grid-v2.js)
-     ↓
-State update (grid[], outputState, etc)
-     ↓
-Render function (renderGrid, renderPreview)
-     ↓
-Canvas drawing (ctx.drawImage, etc)
-     ↓
-SAÍDA (Visual output)
-```
-
-### Performance
-
-- **Canvas rendering**: ~1-2ms por frame (CPU efficient)
-- **Grid size**: até 12×12 (144 células × até 10 layers = 1440 elementos)
-- **Transições**: 60fps com requestAnimationFrame
-- **Memory**: localStorage até 5-10MB (presets)
-- **Draw calls**: Otimizadas com dirty rect checking (TODO)
-
----
-
-## FAQ & Troubleshooting
-
-### Q: Como adicionar um nova layer?
-**A**: 
-```javascript
-function addMediaLayer(row, col, type, fileId) {
-  const layer = {
-    id: generateId(),
-    type: type,              // 'video', 'image', 'text', etc
-    src: fileId,
-    opacity: 1.0,
-    visible: true,
-    blendMode: 'normal'
-  }
-  grid[row][col].layers.push(layer)
-  renderPreview(row, col)
-}
-```
+### preload.js
+- Bridge segura exposta em window.mediaLayers.
+- Metodos de NDI, stream, record e output prontos.
 
----
+### src/controller/app-daw.js
+- Golden Layout com paines:
+  - Camadas
+  - Preview
+  - Propriedades
+- Toolbar:
+  - salvar layout
+  - restaurar
+  - reset
+  - iniciar/parar NDI output
+- Mixer com render loop e composicao final.
 
-### Q: Qual é a diferença entre "Preview" e "Program"?
+### src/output/renderer.js
+- Render de camadas dinamico.
+- Recepcao de frames NDI por camada.
+- Captura periodica de frame para output NDI quando acionado.
 
-**Preview**: O que você está preparando (no grid)  
-**Program**: O que o público está vendo (locked até clicar "ON AIR")
+### src/ndi/ndi-manager.js
+- Receiver por processo bridge ativo.
+- Sender habilitado em modo operacional atual.
+- sendFrame preparado para integracao final com NDI SDK/bridge.
 
-```
-Preview = Monitor esquerda (operador vê)
-Program = Monitor direita (público vê)
-```
+## 6. Checklist de validacao final
 
----
+- [x] Electron inicia sem erro fatal.
+- [x] Golden Layout inicializa.
+- [x] Paines nao sobrepoem a toolbar.
+- [x] Selecao de camada funcional.
+- [x] Composicao final no canvas ativa.
+- [x] Envio de frame via IPC para NDI ativo.
+- [x] Recepcao de comandos na janela output ativa.
+- [x] Stream/record com handlers IPC corretos.
 
-### Q: Como o drag & drop funciona nos painéis?
+## 7. Empacotamento para Windows
 
-Três eventos mouse:
-1. **mousedown** → `startDrag()` (anota posição inicial)
-2. **mousemove** → `onDrag()` (calcula delta, move painel)
-3. **mouseup** → `stopDrag()` (salva em localStorage)
+## 7.1 Pre-requisitos
 
----
+- Node.js 18+ instalado.
+- npm instalado.
+- Dependencias do projeto instaladas.
+- Arquivo de icone em assets/icon.ico.
+- FFmpeg para distribuicao em resources/ffmpeg.exe.
 
-### Q: Posso salvare múltiplos layouts?
+## 7.2 Comandos
 
-Sim! Clique em **💾 (Salvar)**, dê um nome, e pronto:
+Instalar dependencias:
 
-```javascript
-// Usa localStorage com key: "medialayers-dockable-layout"
-{
-  "default": { panels: [...] },
-  "broadcast-preset": { panels: [...] },
-  "meu-layout-custom": { panels: [...] }
-}
+```bash
+npm install
 ```
 
----
+Build geral:
 
-### Q: Como funciona o blending mode?
-
-Canvas nativa API:
-```javascript
-ctx.globalCompositeOperation = 'multiply'  // Modo de mistura
-ctx.globalAlpha = 0.7                       // Opacidade
-ctx.drawImage(image, 0, 0)                  // Desenha
+```bash
+npm run build
 ```
-
-Resultado: Imagem desenhada com modo multiply e 70% opacidade
-
----
 
-### Q: Quantas camadas posso adicionar?
+Instalador NSIS Windows:
 
-Não há limite técnico, mas considera:
-- **Cada layer = 1 drawImage call**
-- **~60fps = 16ms por frame**
-- Com otimização: suporta ~20-30 layers por célula
-- Sem otimização: ~5-10 layers antes de lag
-
----
-
-### Q: Como sincronizar o Preview/Program com a janela de saída?
-
-Via **IPC (Electron)**:
-```javascript
-// Em app-grid-v2.js
-ipcRenderer.send('output:render-frame', {
-  frameData: canvasImageData,
-  isPreview: false,  // Program
-  row, col
-})
+```bash
+npm run build:win
 ```
-
----
-
-### Q: Qual navegador é suportado?
-
-**Electron** (Chromium): ✅  
-Google Chrome: ✅  
-Firefox: ⚠️ (parcial)  
-Edge: ✅  
-Safari: ❌
 
----
+Portable Windows:
 
-### Q: Como resetar um layout para padrão?
-
-```javascript
-// Botão "↻ Resetar" chamada:
-window.layoutManager.resetToDefault()
-
-// Ou manual:
-localStorage.removeItem('medialayers-dockable-layout')
-location.reload()
+```bash
+npm run build:win-portable
 ```
-
----
-
-### Q: Posso usar MediaLayers em mobile?
-
-Não (desktop). Mas **Fase 8** adiciona interface web mobile via WebSocket.
-
----
-
-### Q: Como criar um plugin customizado?
-
-```javascript
-// 1. Criar classe extendendo MediaLayersPlugin
-class MyPlugin extends MediaLayersPlugin {
-  constructor() {
-    super('Meu Plugin', '1.0.0', 'Descrição do que faz')
-    this.settings = { intensity: 1.0 }
-  }
-  
-  renderLayer(ctx, layer, frameTime) {
-    // Lógica de render aqui
-    if (layer.type === 'video') {
-      // Aplicar efeito
-      ctx.filter = `brightness(${this.settings.intensity})`
-      ctx.drawImage(layer.canvas, 0, 0)
-    }
-  }
-}
-
-// 2. Registrar no sistema
-window.MediaLayersPlugins.register(new MyPlugin())
-
-// 3. Aparece automaticamente na aba Plugins
-```
-
----
 
-### Q: Plugins afetam performance?
+## 7.3 Saida esperada
 
-Sim, mas minimamente:
-- **Overhead**: ~0.1-0.5ms por plugin por frame
-- **60fps = 16ms/frame**: Suporta ~20-30 plugins
-- **Otimização**: Plugins só rodam se `enabled = true`
+- Pasta dist/ contendo artefatos:
+  - instalador .exe (NSIS)
+  - opcional portable .exe
 
----
+## 7.4 Resultado atual de build nesta maquina (Linux)
 
-### Q: Como os plugins persistem settings?
+- Build avancou ate packaging win32 com sucesso.
+- Bloqueio final encontrado: ambiente sem Wine.
+- Mensagem: wine is required.
 
-Via `localStorage`:
-```javascript
-// Salvo automaticamente ao toggle
-localStorage.setItem('medialayers-plugins-enabled', 
-  JSON.stringify(['Animated Text', 'Glitch Effect']))
+Conclusao:
 
-// Settings individuais por plugin
-localStorage.setItem('plugin-Animated Text-settings', 
-  JSON.stringify({ speed: 1.5, color: '#ff0000' }))
-```
-
----
-
-### Q: Posso instalar plugins de terceiros?
-
-**Fase 6** suporta, mas requer:
-```javascript
-// Plugin externo precisa ser carregado via <script>
-<script src="meu-plugin.js"></script>
-
-// E registrar automaticamente:
-window.MediaLayersPlugins.register(new MeuPluginExterno())
-```
+- Projeto esta pronto para instalador Windows.
+- Para gerar o .exe final nesta maquina Linux, instalar Wine.
+- Alternativa recomendada: gerar o instalador em maquina Windows (ou CI Windows runner).
 
-**Segurança**: Plugins rodam no mesmo contexto, tenha cuidado!
+## 8. QA operacional rapido
 
----
+1. Abrir aplicacao.
+2. Verificar painel de camadas.
+3. Attach em camada NDI.
+4. Confirmar atualizacao em preview.
+5. Iniciar NDI Output.
+6. Confirmar logs de envio de frame.
+7. Parar NDI Output.
+8. Testar stream start/stop.
+9. Testar record start/stop.
+10. Testar salvar/restaurar layout.
 
-## Conclusão
+## 9. Entrega para instalador
 
-**MediaLayers v2** é um software profissional em **75% de completude**, com arquitetura sólida para as 2 fases restantes.
+Projeto pronto para empacotamento Windows com electron-builder.
 
-### Próximos Passos
-1. ✅ Fases 1-6 completas
-2. ⏳ Fase 7: Vídeo Remoto (WebRTC) (4-5h)
-3. ⏳ Fase 8: Controle Celular (5-6h)
+Itens de release:
 
-### Status de Produção
-- **Código**: 3000+ linhas
-- **Documentação**: 2500+ linhas
-- **Commits Git**: 20+ com histórico limpo
-- **Erros**: 0 (validado)
+- Codigo final consolidado.
+- Guia de operacao e build atualizado.
+- Configuracao de build estabilizada para distribuicao.
 
-**🚀 Pronto para Fase 7!**
+## 10. Nota tecnica sobre SQLite nativo
 
----
+- better-sqlite3 e modulo nativo e depende de ABI compativel com a versao do Electron.
+- Em ambiente Linux de desenvolvimento, pode aparecer aviso de ABI ao iniciar.
+- Isso nao bloqueia o app, pois o banco esta protegido por fallback no main process.
+- Para build final no Windows com suporte completo de SQLite:
+  1. Rodar build em maquina Windows.
+  2. Executar npm install nessa maquina para baixar binarios nativos corretos.
+  3. Gerar instalador com npm run build:win.
 
-**Última atualização**: 30 de março de 2026  
-**Versão**: 2.1.0 (Plugins Edition)  
-**Autor**: MediaLayers Development Team
