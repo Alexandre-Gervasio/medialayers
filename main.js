@@ -35,7 +35,7 @@ function createControllerWindow() {
       nodeIntegration: false
     }
   })
-  controllerWindow.loadFile(path.join(__dirname, 'src/controller/index-v2.html'))
+  controllerWindow.loadFile(path.join(__dirname, 'src/controller/index-daw.html'))
 }
 
 // ─────────────────────────────────────────────

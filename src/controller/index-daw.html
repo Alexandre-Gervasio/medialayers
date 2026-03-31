@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; media-src 'self' blob: mediastream:; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://golden-layout.com; style-src 'self' 'unsafe-inline' https://golden-layout.com; connect-src 'self' ws://localhost:3001 https://cdn.socket.io">
+  <title>MediaLayers — DAW Interface</title>
+  <link rel="stylesheet" href="style-v2.css" />
+  <link rel="stylesheet" href="https://golden-layout.com/files/latest/css/goldenlayout-base.css" />
+  <link rel="stylesheet" href="https://golden-layout.com/files/latest/css/goldenlayout-dark-theme.css" />
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #1a1a1a;
+      color: #ffffff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .lm_header {
+      background: #2d2d2d !important;
+      border-bottom: 1px solid #444 !important;
+    }
+
+    .lm_tab {
+      background: #2d2d2d !important;
+      color: #ccc !important;
+      border-right: 1px solid #444 !important;
+    }
+
+    .lm_tab.lm_active {
+      background: #404040 !important;
+      color: #fff !important;
+    }
+
+    .lm_content {
+      background: #1a1a1a !important;
+      border: none !important;
+    }
+
+    .panel-content {
+      padding: 10px;
+      height: 100%;
+      box-sizing: border-box;
+    }
+
+    .timeline-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 10px;
+      background: #2d2d2d;
+      border-bottom: 1px solid #444;
+    }
+
+    .timeline-controls button {
+      margin: 0 2px;
+      padding: 4px 8px;
+      background: #404040;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+
+    .timeline-controls button:hover {
+      background: #505050;
+    }
+
+    .timeline-time {
+      font-family: monospace;
+      font-size: 14px;
+      color: #00ff00;
+    }
+
+    .grid-container {
+      display: grid;
+      gap: 2px;
+      padding: 10px;
+      background: #1a1a1a;
+    }
+
+    .grid-cell {
+      background: #2d2d2d;
+      border: 2px solid #404040;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      min-height: 60px;
+    }
+
+    .grid-cell:hover {
+      border-color: #606060;
+      background: #353535;
+    }
+
+    .grid-cell.active {
+      border-color: #007acc;
+      background: #2d4a6b;
+    }
+
+    .grid-cell .content {
+      text-align: center;
+      color: #ccc;
+    }
+
+    .preview-canvas {
+      width: 100%;
+      height: 100%;
+      background: #000;
+      border-radius: 4px;
+    }
+
+    .properties-panel {
+      padding: 10px;
+    }
+
+    .property-group {
+      margin-bottom: 15px;
+      padding: 10px;
+      background: #2d2d2d;
+      border-radius: 4px;
+    }
+
+    .property-group h4 {
+      margin: 0 0 10px 0;
+      color: #007acc;
+      font-size: 14px;
+    }
+
+    .property {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .property label {
+      width: 80px;
+      font-size: 12px;
+      color: #ccc;
+    }
+
+    .property input, .property select {
+      flex: 1;
+      padding: 4px 6px;
+      background: #404040;
+      border: 1px solid #555;
+      border-radius: 3px;
+      color: #fff;
+      font-size: 12px;
+    }
+
+    .media-toolbar {
+      display: flex;
+      gap: 5px;
+      padding: 5px;
+      background: #2d2d2d;
+      border-bottom: 1px solid #444;
+    }
+
+    .btn {
+      padding: 6px 10px;
+      background: #404040;
+      color: white;
+      border: 1px solid #555;
+      border-radius: 3px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .btn:hover {
+      background: #505050;
+    }
+
+    .btn-primary {
+      background: #007acc;
+    }
+
+    .btn-primary:hover {
+      background: #0098ff;
+    }
+
+    .timeline-tracks {
+      flex: 1;
+      background: #1a1a1a;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .track {
+      height: 40px;
+      background: #2d2d2d;
+      border-bottom: 1px solid #404040;
+      position: relative;
+    }
+
+    .track-label {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100px;
+      height: 100%;
+      background: #333;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      font-size: 12px;
+      color: #ccc;
+      border-right: 1px solid #444;
+    }
+
+    .track-content {
+      margin-left: 100px;
+      height: 100%;
+      position: relative;
+      background: #252525;
+    }
+
+    .clip {
+      position: absolute;
+      height: 30px;
+      top: 5px;
+      background: #007acc;
+      border-radius: 3px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      font-size: 11px;
+      color: white;
+      border: 1px solid #0098ff;
+    }
+
+    .clip:hover {
+      background: #0098ff;
+    }
+  </style>
+</head>
+<body>
+  <!-- Container principal do Golden Layout -->
+  <div id="golden-layout-container"></div>
+
+  <!-- Scripts -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://golden-layout.com/files/latest/js/goldenlayout.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="app-daw.js"></script>
+</body>
+</html></content>
+<parameter name="filePath">/home/fridayale/Documentos/DEV/medialayers/src/controller/index-daw.html

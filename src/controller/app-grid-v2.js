@@ -416,9 +416,48 @@ function addPluginLayer() {
   }
 
   const cell = grid[selectedCell.row][selectedCell.col]
-  const layer = createLayer('plugin', choice.label, null, choice.pluginName)
+  const layer = createLayer('plugin', choice.label, null, choice.name)
   layer.pluginType = choice.name
   cell.layers.push(layer)
+
+  selectLayer(layer.id)
+  renderLayersPanel()
+  renderPreview(selectedCell.row, selectedCell.col)
+}
+
+async function addRemoteLayer() {
+  if (!selectedCell) {
+    alert('Selecione uma célula primeiro!')
+    return
+  }
+
+  const mode = prompt('Tipo de stream remoto:\n1) HTTP/HTTPS URL\n2) WebRTC (Offer/Answer)\nDigite 1 ou 2', '1')
+  if (!mode) return
+
+  const cell = grid[selectedCell.row][selectedCell.col]
+  let layer = null
+
+  if (mode.trim() === '1') {
+    const streamUrl = prompt('Cole a URL do stream remoto (http:// ou https://):')
+    if (!streamUrl) return
+
+    layer = createLayer('remote', `Remoto: ${streamUrl}`, streamUrl)
+    layer.remoteType = 'http'
+    layer.remoteUrl = streamUrl
+    layer.visible = true
+    cell.layers.push(layer)
+
+  } else if (mode.trim() === '2') {
+    layer = createLayer('remote', 'WebRTC Remote', null)
+    layer.remoteType = 'webrtc'
+    layer.visible = true
+    cell.layers.push(layer)
+
+    await setupWebRTCReceiver(layer)
+  } else {
+    alert('Modo inválido')
+    return
+  }
 
   selectLayer(layer.id)
   renderLayersPanel()
@@ -530,6 +569,20 @@ function renderPreview(row, col) {
       img.src = layer.src
     }
 
+    if (layer.type === 'remote' && (layer.remoteUrl || layer.remoteType === 'webrtc')) {
+      const remoteVideo = createRemoteVideoElement(layer)
+      if (remoteVideo && (remoteVideo.readyState >= 2 || layer.remoteType === 'webrtc')) {
+        previewCtx.drawImage(remoteVideo, 0, 0, w, h)
+      } else {
+        previewCtx.fillStyle = 'rgba(0,0,0,0.7)'
+        previewCtx.fillRect(0, 0, w, h)
+        previewCtx.fillStyle = '#00ffdd'
+        previewCtx.font = '16px Arial'
+        previewCtx.textAlign = 'center'
+        previewCtx.fillText('Conectando stream remoto...', w / 2, h / 2)
+      }
+    }
+
     if (layer.type === 'text' && layer.text) {
       previewCtx.fillStyle = layer.fontColor
       previewCtx.font = `${layer.fontSize}px Arial`
@@ -546,6 +599,121 @@ function renderPreview(row, col) {
   // Reset compositing
   previewCtx.globalCompositeOperation = 'source-over'
   previewCtx.globalAlpha = 1
+}
+
+function createRemoteVideoElement(layer) {
+  if (!layer.remoteUrl && layer.remoteType !== 'webrtc') return null
+
+  if (!layer.videoEl) {
+    const video = document.createElement('video')
+    video.autoplay = true
+    video.muted = true
+    video.playsInline = true
+    video.crossOrigin = 'anonymous'
+    video.style.display = 'none'
+
+    if (layer.remoteType === 'webrtc') {
+      video.srcObject = layer.remoteStream || new MediaStream()
+    } else {
+      video.src = layer.remoteUrl
+    }
+
+    document.body.appendChild(video)
+    layer.videoEl = video
+
+    video.addEventListener('loadeddata', () => {
+      if (selectedCell) {
+        renderMonitorPreview(selectedCell.row, selectedCell.col)
+      }
+    })
+
+    video.addEventListener('error', (err) => {
+      console.warn('Falha ao carregar stream remoto:', layer.remoteUrl || layer.remoteType, err)
+    })
+  } else {
+    if (layer.remoteType === 'webrtc' && layer.remoteStream) {
+      layer.videoEl.srcObject = layer.remoteStream
+    }
+  }
+
+  return layer.videoEl
+}
+
+async function setupWebRTCReceiver(layer) {
+  if (!window.io) {
+    alert('Socket.IO não encontrado. Instale as dependências.')
+    return
+  }
+
+  const roomId = prompt('Digite o ID da sala para conectar:', 'room-1')
+  if (!roomId) return
+
+  const socket = io('http://localhost:3001')
+
+  socket.on('connect', () => {
+    console.log('Conectado ao servidor WebRTC')
+    socket.emit('join-room', roomId)
+  })
+
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+  })
+
+  layer.remoteStream = layer.remoteStream || new MediaStream()
+  const videoEl = createRemoteVideoElement(layer)
+  if (videoEl) {
+    videoEl.srcObject = layer.remoteStream
+  }
+
+  pc.ontrack = (event) => {
+    console.log('Track remoto recebido')
+    event.streams[0]?.getTracks().forEach(track => {
+      layer.remoteStream.addTrack(track)
+    })
+
+    if (layer === getLayerById(selectedLayerId)?.layer) {
+      renderPreview(selectedCell.row, selectedCell.col)
+    }
+    if (outputState.program.row !== null) {
+      renderMonitorProgram(outputState.program.row, outputState.program.col)
+    }
+  }
+
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      socket.emit('webrtc-candidate', { roomId, candidate: event.candidate })
+    }
+  }
+
+  // Receber offer
+  socket.on('webrtc-offer', async (offer) => {
+    console.log('Offer recebida')
+    await pc.setRemoteDescription(offer)
+
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    socket.emit('webrtc-answer', { roomId, answer })
+  })
+
+  // Receber candidates
+  socket.on('webrtc-candidate', (candidate) => {
+    pc.addIceCandidate(candidate)
+  })
+
+  socket.on('user-joined', (userId) => {
+    console.log('Outro usuário entrou na sala')
+  })
+
+  layer.peerConnection = pc
+  layer.socket = socket
+  layer.roomId = roomId
+  layer.remoteType = 'webrtc'
+
+  return pc
 }
 
 // ─────────────────────────────────────────────
@@ -849,6 +1017,20 @@ function renderMonitorProgram(row, col) {
       monitorProgramCtx.font = `${layer.fontSize}px Arial`
       monitorProgramCtx.textAlign = 'center'
       monitorProgramCtx.fillText(layer.text, w / 2, h - 30)
+    }
+
+    if (layer.type === 'remote' && (layer.remoteUrl || layer.remoteType === 'webrtc')) {
+      const remoteVideo = createRemoteVideoElement(layer)
+      if (remoteVideo && (remoteVideo.readyState >= 2 || layer.remoteType === 'webrtc')) {
+        monitorProgramCtx.drawImage(remoteVideo, 0, 0, w, h)
+      } else {
+        monitorProgramCtx.fillStyle = 'rgba(0,0,0,0.7)'
+        monitorProgramCtx.fillRect(0, 0, w, h)
+        monitorProgramCtx.fillStyle = '#00ffdd'
+        monitorProgramCtx.font = '16px Arial'
+        monitorProgramCtx.textAlign = 'center'
+        monitorProgramCtx.fillText('Conectando stream remoto...', w / 2, h / 2)
+      }
     }
 
     // Renderização customizada de plugins (se existir)
@@ -1218,6 +1400,19 @@ function updatePluginsCount() {
   countEl.textContent = `${loaded}/${total} plugins carregados`
 }
 
+function startRenderLoop() {
+  function tick() {
+    if (outputState.preview.row !== null && outputState.preview.col !== null) {
+      renderMonitorPreview(outputState.preview.row, outputState.preview.col)
+    }
+    if (outputState.program.row !== null && outputState.program.col !== null) {
+      renderMonitorProgram(outputState.program.row, outputState.program.col)
+    }
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
 // ─────────────────────────────────────────────
 // TABS
 // ─────────────────────────────────────────────
@@ -1369,6 +1564,111 @@ function setupDockablePanels() {
 }
 
 // ─────────────────────────────────────────────
+// WEBRTC SERVER
+// ─────────────────────────────────────────────
+function startWebRTCServer() {
+  if (window.webrtcServerWindow) {
+    window.webrtcServerWindow.focus()
+    return
+  }
+
+  // Abrir uma nova janela para o servidor WebRTC
+  window.webrtcServerWindow = window.open('', 'webrtc-server', 'width=600,height=400')
+
+  if (!window.webrtcServerWindow) {
+    alert('Popup bloqueado. Permita popups para iniciar o servidor WebRTC.')
+    return
+  }
+
+  // HTML da janela do servidor
+  const serverHTML = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>WebRTC Signaling Server</title>
+      <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f0f0f0; }
+        .server-status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .running { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .stopped { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        button { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; }
+        .start { background: #28a745; color: white; }
+        .stop { background: #dc3545; color: white; }
+        .logs { background: black; color: green; font-family: monospace; padding: 10px; height: 200px; overflow-y: auto; white-space: pre-wrap; }
+      </style>
+    </head>
+    <body>
+      <h2>🚀 WebRTC Signaling Server</h2>
+      <div id="status" class="server-status stopped">Servidor parado</div>
+      <button class="start" onclick="startServer()">Iniciar Servidor</button>
+      <button class="stop" onclick="stopServer()">Parar Servidor</button>
+      <h3>Logs:</h3>
+      <div id="logs" class="logs"></div>
+
+      <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+      <script>
+        let server = null
+        let io = null
+
+        function log(message) {
+          const logs = document.getElementById('logs')
+          logs.textContent += new Date().toLocaleTimeString() + ': ' + message + '\\n'
+          logs.scrollTop = logs.scrollHeight
+        }
+
+        function startServer() {
+          if (server) return
+
+          log('Iniciando servidor WebRTC...')
+
+          // Simular início do servidor (na prática, seria executado no backend)
+          fetch('http://localhost:3001/start', { method: 'POST' })
+            .then(response => {
+              if (response.ok) {
+                document.getElementById('status').className = 'server-status running'
+                document.getElementById('status').textContent = 'Servidor executando na porta 3001'
+                log('Servidor iniciado com sucesso!')
+              } else {
+                throw new Error('Falha ao iniciar servidor')
+              }
+            })
+            .catch(error => {
+              log('Erro: ' + error.message)
+              log('Certifique-se de executar: npm run webrtc-server')
+            })
+        }
+
+        function stopServer() {
+          fetch('http://localhost:3001/stop', { method: 'POST' })
+            .then(() => {
+              document.getElementById('status').className = 'server-status stopped'
+              document.getElementById('status').textContent = 'Servidor parado'
+              log('Servidor parado')
+            })
+            .catch(error => log('Erro ao parar servidor: ' + error.message))
+        }
+
+        // Verificar status inicial
+        fetch('http://localhost:3001/status')
+          .then(response => {
+            if (response.ok) {
+              document.getElementById('status').className = 'server-status running'
+              document.getElementById('status').textContent = 'Servidor executando na porta 3001'
+            }
+          })
+          .catch(() => {
+            log('Servidor não está executando. Clique em "Iniciar Servidor"')
+          })
+      </script>
+    </body>
+    </html>
+  `
+
+  window.webrtcServerWindow.document.write(serverHTML)
+  window.webrtcServerWindow.document.close()
+}
+
+// ─────────────────────────────────────────────
 // INIT
 // ─────────────────────────────────────────────
 (function init() {
@@ -1428,7 +1728,10 @@ function setupDockablePanels() {
   document.getElementById('btn-add-audio')?.addEventListener('click', () => addMediaLayer('audio', 'file-audio'))
   document.getElementById('btn-add-text')?.addEventListener('click', addTextLayer)
   document.getElementById('btn-add-camera')?.addEventListener('click', () => alert('TODO: Camera input'))
+  document.getElementById('btn-add-remote')?.addEventListener('click', () => addRemoteLayer())
+  document.getElementById('btn-start-webrtc-server')?.addEventListener('click', startWebRTCServer)
   document.getElementById('btn-add-plugin-layer')?.addEventListener('click', addPluginLayer)
+  startRenderLoop()
 
   // Event listeners - Preview controls
   document.getElementById('btn-play-preview')?.addEventListener('click', () => {
