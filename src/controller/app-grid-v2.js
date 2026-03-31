@@ -36,7 +36,7 @@ let nextId = 1
 const activeStreams = {}
 const streamChannel = new BroadcastChannel('medialayers-streams')
 
-// Canvas preview
+// Canvas preview (consolidado)
 let previewCanvas = null
 let previewCtx = null
 
@@ -118,10 +118,11 @@ function createCell() {
 // ─────────────────────────────────────────────
 // CRIAR LAYER
 // ─────────────────────────────────────────────
-function createLayer(type, name, src = null) {
+function createLayer(type, name, src = null, pluginName = null) {
   return {
     id: nextId++,
-    type,             // 'video' | 'image' | 'text' | 'audio' | 'camera'
+    type,             // 'video' | 'image' | 'text' | 'audio' | 'camera' | 'plugin'
+    pluginName,      // para plugins customizados
     name,
     src,              // blob URL
     opacity: 1,
@@ -149,6 +150,19 @@ function iconFor(type) {
     camera: '📷',
     ndi: '📡',
   }[type] || '▪'
+}
+
+// Obtém layer por ID, mantendo célula de origem
+function getLayerById(layerId) {
+  for (let r = 0; r < gridRows; r++) {
+    for (let c = 0; c < gridCols; c++) {
+      const layer = grid[r][c].layers.find(l => l.id === layerId)
+      if (layer) {
+        return { layer, row: r, col: c }
+      }
+    }
+  }
+  return null
 }
 
 // ─────────────────────────────────────────────
@@ -214,6 +228,9 @@ function renderGrid() {
       gridEl.appendChild(cellEl)
     }
   }
+
+  // Re-aplicar listeners após renderizar o grid dinâmico
+  setupCellDragDropListeners()
 }
 
 // ─────────────────────────────────────────────
@@ -326,6 +343,19 @@ function addMediaLayer(type, fileInputId) {
   }
 
   const cell = grid[selectedCell.row][selectedCell.col]
+
+  // Suporte a types de plugin customizadas
+  const customLayerType = window.MediaLayersPlugins?.manager?.getCustomLayerTypes()?.find(t => t.name === type)
+  if (customLayerType) {
+    const layer = createLayer('plugin', `${customLayerType.label}`, null, customLayerType.pluginName)
+    layer.pluginType = customLayerType.name
+    cell.layers.push(layer)
+    selectLayer(layer.id)
+    renderLayersPanel()
+    renderPreview(selectedCell.row, selectedCell.col)
+    return
+  }
+
   const input = document.getElementById(fileInputId)
   input.value = ''
 
@@ -362,6 +392,39 @@ function addTextLayer() {
   renderLayersPanel()
   renderPreview(selectedCell.row, selectedCell.col)
 }
+
+function addPluginLayer() {
+  if (!selectedCell) {
+    alert('Selecione uma célula primeiro!')
+    return
+  }
+
+  const pluginTypes = window.MediaLayersPlugins?.manager?.getCustomLayerTypes() || []
+  if (pluginTypes.length === 0) {
+    alert('Nenhum plugin habilitado com tipos de layer disponíveis.')
+    return
+  }
+
+  const names = pluginTypes.map((t, idx) => `${idx + 1}) ${t.label}`).join('\n')
+  const selection = prompt(`Escolha um plugin para adicionar:\n${names}`)
+  if (!selection) return
+
+  const choice = pluginTypes[parseInt(selection, 10) - 1]
+  if (!choice) {
+    alert('Seleção inválida')
+    return
+  }
+
+  const cell = grid[selectedCell.row][selectedCell.col]
+  const layer = createLayer('plugin', choice.label, null, choice.pluginName)
+  layer.pluginType = choice.name
+  cell.layers.push(layer)
+
+  selectLayer(layer.id)
+  renderLayersPanel()
+  renderPreview(selectedCell.row, selectedCell.col)
+}
+
 
 // ─────────────────────────────────────────────
 // DELETE LAYER
@@ -473,6 +536,11 @@ function renderPreview(row, col) {
       previewCtx.textAlign = 'center'
       previewCtx.fillText(layer.text, w / 2, h / 2)
     }
+
+    // Renderização customizada de plugins (se existir)
+    if (layer.pluginName && window.MediaLayersPlugins?.manager) {
+      window.MediaLayersPlugins.manager.renderCustomLayer(previewCtx, layer, previewCanvas)
+    }
   })
 
   // Reset compositing
@@ -553,6 +621,14 @@ function renderProperties() {
     `
   }
 
+  // Painel de propriedades customizadas de plugins
+  if (layer.pluginName && window.MediaLayersPlugins?.manager) {
+    const pluginProps = window.MediaLayersPlugins.manager.getCustomPropertiesPanel(layer)
+    if (pluginProps) {
+      html += `<div class="prop-group plugin-properties-panel">${pluginProps}</div>`
+    }
+  }
+
   panel.innerHTML = html
 
   // Event listeners
@@ -594,32 +670,36 @@ function renderProperties() {
 // ─────────────────────────────────────────────
 // SETUP PREVIEW CANVAS
 // ─────────────────────────────────────────────
-function setupPreviewCanvas() {
-  previewCanvas = document.getElementById('preview-canvas')
-  if (previewCanvas) {
-    previewCtx = previewCanvas.getContext('2d')
-    previewCtx.fillStyle = '#000000'
-    previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height)
+// ═════════════════════════════════════════════════════════════
+// CANVAS SETUP (Consolidado)
+// ═════════════════════════════════════════════════════════════
+function setupCanvas(canvasId) {
+  const canvas = document.getElementById(canvasId)
+  if (canvas) {
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    return { canvas, ctx }
   }
+  return { canvas: null, ctx: null }
 }
 
-// ═════════════════════════════════════════════════════════════
-// FASE 2: SETUP OUTPUT MONITORS
-// ═════════════════════════════════════════════════════════════
-function setupOutputMonitors() {
-  monitorPreviewCanvas = document.getElementById('monitor-preview')
-  if (monitorPreviewCanvas) {
-    monitorPreviewCtx = monitorPreviewCanvas.getContext('2d')
-    monitorPreviewCtx.fillStyle = '#000000'
-    monitorPreviewCtx.fillRect(0, 0, monitorPreviewCanvas.width, monitorPreviewCanvas.height)
-  }
+function setupPreviewCanvas() {
+  const result = setupCanvas('preview-canvas')
+  previewCanvas = result.canvas
+  previewCtx = result.ctx
+}
 
-  monitorProgramCanvas = document.getElementById('monitor-program')
-  if (monitorProgramCanvas) {
-    monitorProgramCtx = monitorProgramCanvas.getContext('2d')
-    monitorProgramCtx.fillStyle = '#000000'
-    monitorProgramCtx.fillRect(0, 0, monitorProgramCanvas.width, monitorProgramCanvas.height)
-  }
+function setupOutputMonitors() {
+  // Monitor Preview (destinado ao operador)
+  const previewResult = setupCanvas('monitor-preview')
+  monitorPreviewCanvas = previewResult.canvas
+  monitorPreviewCtx = previewResult.ctx
+
+  // Monitor Program (saída principal)
+  const programResult = setupCanvas('monitor-program')
+  monitorProgramCanvas = programResult.canvas
+  monitorProgramCtx = programResult.ctx
 
   // Bot ON AIR
   const btnGoLive = document.getElementById('btn-go-live')
@@ -647,6 +727,7 @@ function setupOutputMonitors() {
 
   console.log('✓ Output Monitors configurados')
 }
+
 
 // ═════════════════════════════════════════════════════════════
 // RENDERIZAR MONITOR PREVIEW (Célula em Preparação)
@@ -679,34 +760,34 @@ function renderMonitorPreview(row, col) {
 
     // Renderiza cada tipo
     if (layer.type === 'video' && layer.src) {
-      monitorPreviewCtx.fillStyle = 'rgba(100, 100, 100, 0.5)'
-      monitorPreviewCtx.fillRect(10, 10, w - 20, h - 20)
-      monitorPreviewCtx.fillStyle = '#ffffff'
-      monitorPreviewCtx.font = '16px Arial'
-      monitorPreviewCtx.textAlign = 'center'
-      monitorPreviewCtx.fillText('🎥 ' + layer.name, w / 2, h / 2)
+      previewCtx.fillStyle = 'rgba(100, 100, 100, 0.5)'
+      previewCtx.fillRect(10, 10, w - 20, h - 20)
+      previewCtx.fillStyle = '#ffffff'
+      previewCtx.font = '16px Arial'
+      previewCtx.textAlign = 'center'
+      previewCtx.fillText('🎥 ' + layer.name, w / 2, h / 2)
     }
 
     if (layer.type === 'image' && layer.src) {
       const img = new Image()
       img.onload = () => {
-        monitorPreviewCtx.drawImage(img, 0, 0, w, h)
+        previewCtx.drawImage(img, 0, 0, w, h)
       }
       img.src = layer.src
     }
 
     if (layer.type === 'text' && layer.text) {
-      monitorPreviewCtx.fillStyle = layer.fontBg
-      monitorPreviewCtx.fillRect(0, h - 100, w, 100)
-      monitorPreviewCtx.fillStyle = layer.fontColor
-      monitorPreviewCtx.font = `${layer.fontSize}px Arial`
-      monitorPreviewCtx.textAlign = 'center'
-      monitorPreviewCtx.fillText(layer.text, w / 2, h - 30)
+      previewCtx.fillStyle = layer.fontBg
+      previewCtx.fillRect(0, h - 100, w, 100)
+      previewCtx.fillStyle = layer.fontColor
+      previewCtx.font = `${layer.fontSize}px Arial`
+      previewCtx.textAlign = 'center'
+      previewCtx.fillText(layer.text, w / 2, h - 30)
     }
   })
 
-  monitorPreviewCtx.globalCompositeOperation = 'source-over'
-  monitorPreviewCtx.globalAlpha = 1
+  previewCtx.globalCompositeOperation = 'source-over'
+  previewCtx.globalAlpha = 1
 
   // Atualiza info
   const info = document.getElementById('monitor-preview-info')
@@ -768,6 +849,11 @@ function renderMonitorProgram(row, col) {
       monitorProgramCtx.font = `${layer.fontSize}px Arial`
       monitorProgramCtx.textAlign = 'center'
       monitorProgramCtx.fillText(layer.text, w / 2, h - 30)
+    }
+
+    // Renderização customizada de plugins (se existir)
+    if (layer.pluginName && window.MediaLayersPlugins?.manager) {
+      window.MediaLayersPlugins.manager.renderCustomLayer(monitorProgramCtx, layer, monitorProgramCanvas)
     }
   })
 
@@ -966,12 +1052,7 @@ function setupCellDragDropListeners() {
   })
 }
 
-// Modificar renderGrid para chamar setupCellDragDropListeners()
-const originalRenderGrid = renderGrid
-function renderGrid() {
-  originalRenderGrid()
-  setupCellDragDropListeners()  // Re-aplicar listeners após renderizar
-}
+// NOTE: renderGrid já chama setupCellDragDropListeners diretamente para evitar redefinição redundante.
 
 // ═════════════════════════════════════════════════════════════
 // FASE 5: MESA DE CORTE / SWITCHER FUNCTIONS
@@ -1071,6 +1152,70 @@ function initializeInputs() {
   addInput('clip', 'Clip B')
   addInput('ndi', 'NDI Stream')
   addInput('screen', 'Tela')
+}
+
+// ═════════════════════════════════════════════════════════════
+// FASE 6: PLUGINS MANAGEMENT
+// ═════════════════════════════════════════════════════════════
+
+// Renderizar lista de plugins
+function renderPluginsList() {
+  const listEl = document.getElementById('plugins-list')
+  if (!listEl || !window.MediaLayersPlugins) return
+
+  listEl.innerHTML = ''
+
+  const plugins = window.MediaLayersPlugins.manager.list()
+  plugins.forEach(pluginName => {
+    const plugin = window.MediaLayersPlugins.manager.get(pluginName)
+    if (!plugin) return
+
+    const itemEl = document.createElement('div')
+    itemEl.className = `plugin-item ${plugin.enabled ? 'enabled' : ''}`
+
+    itemEl.innerHTML = `
+      <div class="plugin-info">
+        <div class="plugin-name">${plugin.name}</div>
+        <div class="plugin-meta">v${plugin.version} • ${plugin.author}</div>
+      </div>
+      <div class="plugin-controls">
+        <button class="plugin-btn ${plugin.enabled ? 'disable' : 'enable'}" data-action="${plugin.enabled ? 'disable' : 'enable'}" data-plugin="${pluginName}">
+          ${plugin.enabled ? 'Desabilitar' : 'Habilitar'}
+        </button>
+      </div>
+    `
+
+    // Event listeners
+    const btn = itemEl.querySelector('.plugin-btn')
+    btn.addEventListener('click', () => {
+      const action = btn.dataset.action
+      const pluginName = btn.dataset.plugin
+
+      if (action === 'enable') {
+        window.MediaLayersPlugins.manager.enable(pluginName)
+      } else {
+        window.MediaLayersPlugins.manager.disable(pluginName)
+      }
+
+      renderPluginsList()
+      updatePluginsCount()
+    })
+
+    listEl.appendChild(itemEl)
+  })
+
+  updatePluginsCount()
+}
+
+// Atualizar contador de plugins
+function updatePluginsCount() {
+  const countEl = document.getElementById('plugins-count')
+  if (!countEl || !window.MediaLayersPlugins) return
+
+  const loaded = window.MediaLayersPlugins.manager.listLoaded().length
+  const total = window.MediaLayersPlugins.manager.list().length
+
+  countEl.textContent = `${loaded}/${total} plugins carregados`
 }
 
 // ─────────────────────────────────────────────
@@ -1238,6 +1383,11 @@ function setupDockablePanels() {
   // FASE 3: Setup dockable panels
   setupDockablePanels()
 
+  // FASE 6: Setup plugins
+  if (window.registerExamplePlugins) {
+    window.registerExamplePlugins()
+  }
+
   // Setup tabs
   setupTabs()
 
@@ -1247,6 +1397,9 @@ function setupDockablePanels() {
   // Renderiza UI
   renderGrid()
   updateCellInfo()
+
+  // FASE 6: Renderizar plugins
+  renderPluginsList()
   
   // FASE 2: Renderiza monitores em standby
   const emptyCell = { layers: [] }
@@ -1275,6 +1428,7 @@ function setupDockablePanels() {
   document.getElementById('btn-add-audio')?.addEventListener('click', () => addMediaLayer('audio', 'file-audio'))
   document.getElementById('btn-add-text')?.addEventListener('click', addTextLayer)
   document.getElementById('btn-add-camera')?.addEventListener('click', () => alert('TODO: Camera input'))
+  document.getElementById('btn-add-plugin-layer')?.addEventListener('click', addPluginLayer)
 
   // Event listeners - Preview controls
   document.getElementById('btn-play-preview')?.addEventListener('click', () => {
@@ -1299,6 +1453,18 @@ function setupDockablePanels() {
     console.log('✓ Entradas atualizadas')
   })
   document.getElementById('btn-take')?.addEventListener('click', takeInput)
+
+  // ═════════════════════════════════════════════════════════════
+  // FASE 6: SETUP PLUGINS LISTENERS
+  // ═════════════════════════════════════════════════════════════
+  document.getElementById('btn-refresh-plugins')?.addEventListener('click', () => {
+    renderPluginsList()
+    console.log('✓ Plugins atualizados')
+  })
+
+  document.getElementById('btn-add-plugin')?.addEventListener('click', () => {
+    alert('Funcionalidade de instalar plugins será implementada na Fase 7')
+  })
 
   // ═════════════════════════════════════════════════════════════
   // FASE 4: SETUP DRAG & DROP LISTENERS
