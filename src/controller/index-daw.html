@@ -2,21 +2,39 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; media-src 'self' blob: mediastream:; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://golden-layout.com https://code.jquery.com; style-src 'self' 'unsafe-inline' https://golden-layout.com; connect-src 'self' ws://localhost:3001 https://cdn.socket.io">
-  <title>MediaLayers — DAW Interface</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; media-src 'self' blob: mediastream:; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://code.jquery.com https://cdn.jsdelivr.net http://localhost:3900; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' ws://localhost:3001 ws://localhost:3900 http://localhost:3900 https://cdn.socket.io https://cdn.jsdelivr.net"
+  >
+  <title>MediaLayers - DAW Interface</title>
   <link rel="stylesheet" href="style-v2.css" />
-  <link rel="stylesheet" href="https://golden-layout.com/files/latest/css/goldenlayout-base.css" />
-  <link rel="stylesheet" href="https://golden-layout.com/files/latest/css/goldenlayout-dark-theme.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/golden-layout@1.5.9/src/css/goldenlayout-base.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/golden-layout@1.5.9/src/css/goldenlayout-dark-theme.css" />
   <style>
+    :root {
+      --bg: #0f1420;
+      --bg-2: #111827;
+      --surface: #182233;
+      --surface-2: #1f2d45;
+      --line: #2f425f;
+      --text: #e7eef9;
+      --muted: #9fb3cc;
+      --accent: #1fb6ff;
+      --ok: #31a24c;
+      --warn: #b77719;
+      --danger: #983535;
+    }
+
+    * { box-sizing: border-box; }
+
     html, body {
       margin: 0;
-      padding: 0;
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #1a1a1a;
-      color: #ffffff;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: radial-gradient(circle at 20% 0%, #172238 0%, var(--bg) 45%, #0b111b 100%);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
     }
 
     #golden-layout-toolbar {
@@ -24,322 +42,219 @@
       top: 0;
       left: 0;
       right: 0;
-      height: 52px;
-      z-index: 9999;
+      height: 56px;
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 4px 12px;
-      background: rgba(12, 18, 26, 0.92);
-      border-bottom: 1px solid #29313c;
-      backdrop-filter: blur(5px);
+      padding: 8px 12px;
+      z-index: 1000;
+      background: rgba(10, 16, 27, 0.9);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(6px);
+      overflow-x: auto;
+      white-space: nowrap;
     }
 
     #golden-layout-container {
       position: absolute;
-      top: 52px;
+      top: 56px;
       left: 0;
       right: 0;
       bottom: 0;
+      min-height: 0;
       overflow: hidden;
-      background: #10141f;
     }
 
-    .lm_header {
-      background: #2d2d2d !important;
-      border-bottom: 1px solid #444 !important;
-    }
-
-    .lm_tab {
-      background: #2d2d2d !important;
-      color: #ccc !important;
-      border-right: 1px solid #444 !important;
-    }
-
-    .lm_tab.lm_active {
-      background: #404040 !important;
-      color: #fff !important;
-    }
-
-    .lm_content {
-      background: #1a1a1a !important;
-      border: none !important;
-    }
-
-    .layer-item.selected { background: #2f4f5f !important; color: #fff; }
+    .lm_header { background: var(--surface) !important; border-bottom: 1px solid var(--line) !important; }
+    .lm_tab { background: #111a29 !important; color: var(--muted) !important; border-right: 1px solid var(--line) !important; }
+    .lm_tab.lm_active { background: var(--surface-2) !important; color: var(--text) !important; }
+    .lm_content { background: var(--bg-2) !important; }
 
     .panel-content {
-      padding: 10px;
       height: 100%;
-      box-sizing: border-box;
-    }
-
-    .timeline-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 5px 10px;
-      background: #2d2d2d;
-      border-bottom: 1px solid #444;
-    }
-
-    .timeline-controls button {
-      margin: 0 2px;
-      padding: 4px 8px;
-      background: #404040;
-      color: white;
-      border: 1px solid #555;
-      border-radius: 3px;
-      cursor: pointer;
-    }
-
-    .timeline-controls button:hover {
-      background: #505050;
-    }
-
-    .timeline-time {
-      font-family: monospace;
-      font-size: 14px;
-      color: #00ff00;
-    }
-
-    .grid-container {
-      display: grid;
-      gap: 2px;
+      overflow: auto;
       padding: 10px;
-      background: #1a1a1a;
-    }
-
-    .grid-cell {
-      background: #2d2d2d;
-      border: 2px solid #404040;
-      border-radius: 4px;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: all 0.2s;
-      min-height: 60px;
+      flex-direction: column;
+      gap: 10px;
     }
 
-    .grid-cell:hover {
-      border-color: #606060;
-      background: #353535;
-    }
-
-    .grid-cell.active {
-      border-color: #007acc;
-      background: #2d4a6b;
-    }
-
-    .grid-cell .content {
-      text-align: center;
-      color: #ccc;
-    }
-
-    .preview-canvas {
-      width: 100%;
-      height: 100%;
-      background: #000;
-      border-radius: 4px;
-    }
-
-    .properties-panel {
-      padding: 10px;
-    }
-
-    .property-group {
-      margin-bottom: 15px;
-      padding: 10px;
-      background: #2d2d2d;
-      border-radius: 4px;
-    }
-
-    .property-group h4 {
-      margin: 0 0 10px 0;
-      color: #007acc;
-      font-size: 14px;
-    }
-
-    .property {
-      display: flex;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-
-    .property label {
-      width: 80px;
+    .panel-title {
       font-size: 12px;
-      color: #ccc;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 6px;
     }
 
-    .property input, .property select {
-      flex: 1;
-      padding: 4px 6px;
-      background: #404040;
-      border: 1px solid #555;
-      border-radius: 3px;
-      color: #fff;
-      font-size: 12px;
-    }
-
-    .media-toolbar {
-      display: flex;
-      gap: 5px;
-      padding: 5px;
-      background: #2d2d2d;
-      border-bottom: 1px solid #444;
-    }
-
-    .btn {
-      padding: 6px 10px;
-      background: #404040;
-      color: white;
-      border: 1px solid #555;
-      border-radius: 3px;
+    .toolbar-btn {
+      border: 1px solid var(--line);
+      background: #20334e;
+      color: var(--text);
+      border-radius: 6px;
+      padding: 7px 12px;
       cursor: pointer;
       font-size: 12px;
+      transition: background 0.15s ease;
     }
 
-    .btn:hover {
-      background: #505050;
-    }
+    .toolbar-btn:hover { background: #2a4567; }
+    .toolbar-btn.success { background: #1d4f2a; border-color: #2c7540; }
+    .toolbar-btn.warning { background: #604112; border-color: #88612a; }
+    .toolbar-btn.danger { background: #612a2a; border-color: #854040; }
+
+    .layer-label { color: var(--muted); font-size: 12px; margin-left: 12px; }
 
     .layer-list {
       list-style: none;
       margin: 0;
       padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
     }
 
     .layer-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 6px;
       padding: 8px;
-      border: 1px solid #2f2f2f;
-      background: #181c24;
-      border-radius: 4px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #141f31;
       cursor: pointer;
-      transition: background .18s ease;
     }
 
-    .layer-item.selected {
-      background: #0f3f67;
-      border-color: #0085d0;
-    }
+    .layer-item.selected { border-color: var(--accent); background: #13324c; }
 
-    .layer-title {
-      color: #e8eef7;
-      font-size: 12px;
-    }
-
-    .layer-actions {
+    .layer-row {
       display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .layer-actions { display: flex; gap: 6px; }
+
+    .btn {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 4px 8px;
+      background: #1f304a;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 11px;
+    }
+
+    .btn:hover { background: #2a4568; }
+    .btn.small { padding: 3px 6px; }
+
+    .switcher-wrap {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      min-height: 280px;
+      height: 100%;
+    }
+
+    .monitor {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0a111b;
+      display: flex;
+      flex-direction: column;
+      min-height: 240px;
+    }
+
+    .monitor-head {
+      font-size: 11px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+      padding: 6px 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .monitor canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      flex: 1;
+    }
+
+    .switcher-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+
+    .timeline-grid,
+    .clip-editor {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #141f31;
+      min-height: 90px;
+      padding: 10px;
+      overflow: auto;
+    }
+
+    .timeline-grid {
+      display: grid;
+      grid-template-columns: repeat(16, minmax(50px, 1fr));
       gap: 6px;
     }
 
-    .toolbar-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 6px 12px;
+    .cell {
+      height: 32px;
       border-radius: 4px;
-      border: 1px solid #38506c;
-      color: #eee;
-      background: #1a273c;
-      cursor: pointer;
+      border: 1px solid #304663;
+      background: #1d2e45;
+    }
+
+    .drop-zone {
+      border: 1px dashed #3d5a7d;
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--muted);
+      text-align: center;
       font-size: 12px;
     }
 
-    .toolbar-btn:hover {
-      background: #2a3f5f;
+    .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(31, 182, 255, 0.08);
+      color: var(--text);
     }
 
-    .toolbar-btn.success { background: #0b702c; border-color: #0e8f3d; }
-    .toolbar-btn.warning { background: #7a4f0a; border-color: #a0701a; }
-    .toolbar-btn.danger  { background: #701515; border-color: #a01f1f; }
-
-    .layer-label {
-      color: #b7d1ec;
-      margin-left: 14px;
+    .properties-panel label { font-size: 12px; color: var(--muted); margin-bottom: 4px; display: block; }
+    .properties-panel input,
+    .properties-panel select,
+    .properties-panel textarea {
+      width: 100%;
+      background: #111a29;
+      border: 1px solid var(--line);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 6px 8px;
       font-size: 12px;
+      margin-bottom: 10px;
     }
 
-    .btn-primary {
-      background: #007acc;
-    }
-
-    .btn-primary:hover {
-      background: #0098ff;
-    }
-
-    .timeline-tracks {
-      flex: 1;
-      background: #1a1a1a;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .track {
-      height: 40px;
-      background: #2d2d2d;
-      border-bottom: 1px solid #404040;
-      position: relative;
-    }
-
-    .track-label {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100px;
-      height: 100%;
-      background: #333;
-      display: flex;
-      align-items: center;
-      padding: 0 10px;
-      font-size: 12px;
-      color: #ccc;
-      border-right: 1px solid #444;
-    }
-
-    .track-content {
-      margin-left: 100px;
-      height: 100%;
-      position: relative;
-      background: #252525;
-    }
-
-    .clip {
-      position: absolute;
-      height: 30px;
-      top: 5px;
-      background: #007acc;
-      border-radius: 3px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      padding: 0 8px;
-      font-size: 11px;
-      color: white;
-      border: 1px solid #0098ff;
-    }
-
-    .clip:hover {
-      background: #0098ff;
+    @media (max-width: 980px) {
+      .switcher-wrap { grid-template-columns: 1fr; }
+      #golden-layout-toolbar { height: 64px; }
+      #golden-layout-container { top: 64px; }
     }
   </style>
 </head>
 <body>
   <div id="golden-layout-toolbar"></div>
-  <!-- Container principal do Golden Layout -->
   <div id="golden-layout-container"></div>
 
-  <!-- Scripts -->
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-  <script src="https://golden-layout.com/files/latest/js/goldenlayout.min.js"></script>
+  <script src="https://code.jquery.com/jquery-2.2.4.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/golden-layout@1.5.9/dist/goldenlayout.min.js"></script>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="plugins.js"></script>
   <script src="app-daw.js"></script>
 </body>
-</html></content>
-<parameter name="filePath">/home/fridayale/Documentos/DEV/medialayers/src/controller/index-daw.html
+</html>

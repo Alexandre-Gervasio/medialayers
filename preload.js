@@ -17,6 +17,16 @@ contextBridge.exposeInMainWorld('mediaLayers', {
   openOutput:       (id)        => ipcRenderer.invoke('open-output', id),
   closeOutput:      (id)        => ipcRenderer.invoke('close-output', id),
   onOutputsUpdated: (callback)  => ipcRenderer.on('outputs-updated', (e, ids) => callback(ids)),
+  onRemoteCommand: (callback)   => ipcRenderer.on('remote-control-command', (e, cmd) => callback(cmd)),
+  getRemoteControlInfo: ()      => ipcRenderer.invoke('get-remote-control-info'),
+  onRemoteControlInfo: (cb)     => ipcRenderer.on('remote-control-info', (e, data) => cb(data)),
+
+  // ── Auto Update ───────────────────────────────────────────
+  appUpdateGetConfig: ()        => ipcRenderer.invoke('app-update-get-config'),
+  appUpdateSetConfig: (config)  => ipcRenderer.invoke('app-update-set-config', config),
+  appUpdateCheck: ()            => ipcRenderer.invoke('app-update-check'),
+  appUpdateInstall: ()          => ipcRenderer.invoke('app-update-install'),
+  onAppUpdateStatus: (cb)       => ipcRenderer.on('app-update-status', (e, data) => cb(data)),
 
   // ── NDI ──────────────────────────────────────────────────
   ndiAvailable:       ()        => ipcRenderer.invoke('ndi-available'),

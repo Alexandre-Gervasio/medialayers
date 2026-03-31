@@ -123,6 +123,7 @@ function startNDIOutputCapture() {
       window.mediaLayers.sendNdiOutputFrame({
         width: frame.width,
         height: frame.height,
+        layerId: 0,
         data: new Uint8Array(frame.data)
       })
     } catch (e) {
@@ -228,6 +229,15 @@ function renderMediaLayer(layer, zIndex) {
     audio.volume = layer.volume ?? 1; audio.autoplay = true;
     wrapper.appendChild(audio);
     audio.play().catch(() => {});
+  }
+
+  if (layer.type === 'browser' && layer.url) {
+    const iframe = document.createElement('iframe');
+    iframe.src = layer.url;
+    iframe.referrerPolicy = 'no-referrer';
+    iframe.allow = 'autoplay; camera; microphone; clipboard-read; clipboard-write';
+    iframe.style.cssText = 'width:100%;height:100%;border:0;background:#000;';
+    wrapper.appendChild(iframe);
   }
 
   layersContainer.appendChild(wrapper);

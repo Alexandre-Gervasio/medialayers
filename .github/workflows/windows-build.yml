@@ -1,0 +1,66 @@
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=optional
+
+      - name: Run smoke tests
+        run: npm run ci:smoke
+
+  build-win:
+    needs: smoke
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=optional
+
+      - name: Build Windows installer
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run build:win
+
+      - name: Build and publish Windows release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:win:publish
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: medialayers-win
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/*.yml

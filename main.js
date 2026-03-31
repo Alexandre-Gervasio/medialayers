@@ -5,6 +5,12 @@
 
 const { app, BrowserWindow, ipcMain, screen } = require('electron')
 const path = require('path')
+const fs = require('fs')
+const os = require('os')
+const express = require('express')
+const { createServer } = require('http')
+const { Server } = require('socket.io')
+const { autoUpdater } = require('electron-updater')
 
 // NDI Manager — carregado com segurança (não quebra se grandiose não estiver instalado)
 let ndi = null
@@ -17,6 +23,200 @@ try {
 
 let controllerWindow = null
 const outputWindows = {} // { displayId: BrowserWindow }
+let remoteHttpServer = null
+let remoteIo = null
+let remoteControlInfo = { port: 3900, urls: [] }
+let updateHandlersRegistered = false
+const GITHUB_RELEASES_BASE_URL = 'https://github.com/Alexandre-Gervasio/medialayers/releases'
+
+const UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'update-config.json')
+const DEFAULT_UPDATE_CONFIG = {
+  feedUrl: '',
+  autoCheck: true
+}
+const updateState = {
+  configured: false,
+  checking: false,
+  available: false,
+  downloaded: false,
+  error: null,
+  message: 'Atualizacao automatica nao configurada.',
+  currentVersion: app.getVersion(),
+  latestVersion: null,
+  downloadProgress: null,
+  feedUrl: '',
+  isPackaged: app.isPackaged
+}
+
+function buildRemoteControlUrls(port) {
+  const urls = [{ label: 'Este computador', url: `http://localhost:${port}` }]
+  const interfaces = os.networkInterfaces()
+
+  Object.values(interfaces).forEach((entries) => {
+    (entries || []).forEach((entry) => {
+      if (!entry || entry.family !== 'IPv4' || entry.internal) return
+      urls.push({
+        label: `Rede local (${entry.address})`,
+        url: `http://${entry.address}:${port}`
+      })
+    })
+  })
+
+  return urls.filter((item, index, list) => list.findIndex((candidate) => candidate.url === item.url) === index)
+}
+
+function broadcastRemoteControlInfo() {
+  if (controllerWindow && !controllerWindow.isDestroyed()) {
+    controllerWindow.webContents.send('remote-control-info', remoteControlInfo)
+  }
+}
+
+function readUpdateConfig() {
+  try {
+    if (!fs.existsSync(UPDATE_CONFIG_PATH)) {
+      return { ...DEFAULT_UPDATE_CONFIG }
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, 'utf8'))
+    return {
+      ...DEFAULT_UPDATE_CONFIG,
+      ...parsed
+    }
+  } catch (error) {
+    console.warn('[Updater] Falha ao ler configuracao:', error.message)
+    return { ...DEFAULT_UPDATE_CONFIG }
+  }
+}
+
+function writeUpdateConfig(config) {
+  const nextConfig = {
+    ...DEFAULT_UPDATE_CONFIG,
+    ...config
+  }
+
+  fs.writeFileSync(UPDATE_CONFIG_PATH, JSON.stringify(nextConfig, null, 2))
+  return nextConfig
+}
+
+function updateUpdateState(patch) {
+  Object.assign(updateState, patch)
+
+  if (controllerWindow && !controllerWindow.isDestroyed()) {
+    controllerWindow.webContents.send('app-update-status', { ...updateState })
+  }
+}
+
+function getConfiguredFeedUrl() {
+  const config = readUpdateConfig()
+  const feedUrl = String(process.env.MEDIALAYERS_UPDATE_URL || config.feedUrl || '').trim()
+  return feedUrl.replace(/\/+$/, '')
+}
+
+function getDefaultUpdateProvider() {
+  return {
+    provider: 'github',
+    owner: 'Alexandre-Gervasio',
+    repo: 'medialayers'
+  }
+}
+
+function configureAutoUpdater() {
+  if (updateHandlersRegistered) return
+
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('checking-for-update', () => {
+    updateUpdateState({
+      checking: true,
+      error: null,
+      message: 'Verificando atualizacoes...'
+    })
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    updateUpdateState({
+      checking: false,
+      available: true,
+      downloaded: false,
+      latestVersion: info?.version || null,
+      message: `Nova versao encontrada: ${info?.version || 'desconhecida'}. Baixando...`
+    })
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    updateUpdateState({
+      checking: false,
+      available: false,
+      downloaded: false,
+      latestVersion: null,
+      message: 'Voce ja esta na versao mais recente.'
+    })
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    updateUpdateState({
+      downloadProgress: progress.percent,
+      message: `Baixando atualizacao: ${Math.round(progress.percent)}%`
+    })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    updateUpdateState({
+      checking: false,
+      available: true,
+      downloaded: true,
+      latestVersion: info?.version || null,
+      message: `Atualizacao ${info?.version || ''} pronta para instalar.`.trim(),
+      downloadProgress: 100
+    })
+  })
+
+  autoUpdater.on('error', (error) => {
+    updateUpdateState({
+      checking: false,
+      error: error.message,
+      message: `Falha no auto-update: ${error.message}`
+    })
+  })
+
+  updateHandlersRegistered = true
+}
+
+async function checkForAppUpdates() {
+  const feedUrl = getConfiguredFeedUrl()
+  const usingDefaultGithubFeed = !feedUrl
+
+  updateUpdateState({
+    configured: true,
+    feedUrl: feedUrl || GITHUB_RELEASES_BASE_URL,
+    isPackaged: app.isPackaged,
+    currentVersion: app.getVersion()
+  })
+
+  if (!app.isPackaged) {
+    updateUpdateState({
+      checking: false,
+      message: 'Auto-update desativado em desenvolvimento. Gere uma release empacotada para testar.'
+    })
+    return { ok: false, reason: 'not-packaged' }
+  }
+
+  if (usingDefaultGithubFeed) {
+    autoUpdater.setFeedURL(getDefaultUpdateProvider())
+    updateUpdateState({
+      message: 'Verificando atualizacoes no GitHub Releases...'
+    })
+  } else {
+    autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl })
+    updateUpdateState({
+      message: `Verificando atualizacoes em ${feedUrl}...`
+    })
+  }
+
+  await autoUpdater.checkForUpdates()
+  return { ok: true }
+}
 
 // ─────────────────────────────────────────────
 // Janela de CONTROLE
@@ -86,12 +286,117 @@ function createAllOutputWindows() {
   secondaryDisplays.forEach(display => createOutputWindow(display))
 }
 
+function startRemoteControlServer() {
+  if (remoteHttpServer) return
+
+  const remoteApp = express()
+  const httpServer = createServer(remoteApp)
+  const io = new Server(httpServer, {
+    cors: { origin: '*', methods: ['GET', 'POST'] }
+  })
+
+  remoteApp.get('/health', (req, res) => {
+    res.json({ ok: true, service: 'medialayers-remote' })
+  })
+
+  remoteApp.get('/', (req, res) => {
+    res.type('html').send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MediaLayers Remote</title>
+    <style>
+      body { margin:0; font-family:Segoe UI,Tahoma,sans-serif; background:#0f172a; color:#e2e8f0; }
+      .wrap { max-width:480px; margin:0 auto; padding:20px; }
+      h1 { font-size:18px; margin:0 0 14px; }
+      .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+      button { background:#1d4ed8; color:#fff; border:0; border-radius:8px; padding:14px; font-size:14px; }
+      button.alt { background:#334155; }
+      button.warn { background:#b45309; }
+      .status { margin-top:12px; color:#93c5fd; font-size:12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>MediaLayers Remote</h1>
+      <div class="grid">
+        <button data-cmd="prev">Anterior</button>
+        <button data-cmd="next">Próximo</button>
+        <button data-cmd="take">TAKE</button>
+        <button class="warn" data-cmd="clear">CLEAR</button>
+      </div>
+      <div class="status" id="status">Conectando...</div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+      const status = document.getElementById('status');
+      socket.on('connect', () => { status.textContent = 'Conectado'; });
+      socket.on('disconnect', () => { status.textContent = 'Desconectado'; });
+      document.querySelectorAll('button[data-cmd]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          socket.emit('remote:command', { type: btn.dataset.cmd });
+        });
+      });
+    </script>
+  </body>
+</html>`)
+  })
+
+  io.on('connection', (socket) => {
+    socket.on('remote:command', (command) => {
+      if (!controllerWindow || controllerWindow.isDestroyed()) return
+      controllerWindow.webContents.send('remote-control-command', command)
+    })
+  })
+
+  const port = Number(process.env.MEDIALAYERS_REMOTE_PORT || 3900)
+  httpServer.listen(port, '0.0.0.0', () => {
+    remoteControlInfo = {
+      port,
+      urls: buildRemoteControlUrls(port)
+    }
+    console.log(`[Remote] Controle remoto ativo em http://localhost:${port}`)
+    broadcastRemoteControlInfo()
+  })
+
+  remoteHttpServer = httpServer
+  remoteIo = io
+}
+
 // ─────────────────────────────────────────────
 // Inicialização
 // ─────────────────────────────────────────────
 app.whenReady().then(() => {
+  configureAutoUpdater()
   createControllerWindow()
   createAllOutputWindows()
+  startRemoteControlServer()
+
+  const updateConfig = readUpdateConfig()
+  const feedUrl = getConfiguredFeedUrl()
+  updateUpdateState({
+    configured: Boolean(feedUrl),
+    feedUrl,
+    isPackaged: app.isPackaged,
+    currentVersion: app.getVersion(),
+    message: feedUrl
+      ? 'Auto-update configurado. Pronto para verificar atualizacoes.'
+      : 'Configure a URL de updates para habilitar atualizacao automatica.'
+  })
+
+  if (updateConfig.autoCheck) {
+    setTimeout(() => {
+      checkForAppUpdates().catch((error) => {
+        updateUpdateState({
+          checking: false,
+          error: error.message,
+          message: `Falha ao verificar atualizacoes: ${error.message}`
+        })
+      })
+    }, 3000)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -142,6 +447,50 @@ ipcMain.handle('get-displays', () => {
   }))
 })
 
+ipcMain.handle('get-remote-control-info', () => remoteControlInfo)
+
+ipcMain.handle('app-update-get-config', () => {
+  const config = readUpdateConfig()
+  const feedUrl = getConfiguredFeedUrl()
+  return {
+    ...config,
+    isPackaged: app.isPackaged,
+    currentVersion: app.getVersion(),
+    effectiveFeedUrl: feedUrl,
+    state: { ...updateState }
+  }
+})
+
+ipcMain.handle('app-update-set-config', (event, config) => {
+  const nextConfig = writeUpdateConfig(config || {})
+  const feedUrl = getConfiguredFeedUrl()
+
+  updateUpdateState({
+    configured: Boolean(feedUrl),
+    feedUrl,
+    message: feedUrl
+      ? 'Configuracao de update salva.'
+      : 'URL de update vazia. Auto-update desativado.'
+  })
+
+  return {
+    ...nextConfig,
+    effectiveFeedUrl: feedUrl,
+    state: { ...updateState }
+  }
+})
+
+ipcMain.handle('app-update-check', async () => checkForAppUpdates())
+
+ipcMain.handle('app-update-install', async () => {
+  if (!updateState.downloaded) {
+    return { ok: false, reason: 'not-downloaded' }
+  }
+
+  setImmediate(() => autoUpdater.quitAndInstall())
+  return { ok: true }
+})
+
 // Abre uma janela de saída para um display específico
 ipcMain.handle('open-output', (event, displayId) => {
   if (outputWindows[displayId]) return // já existe
@@ -183,6 +532,13 @@ ipcMain.handle('ndi-find-sources', async () => {
 ipcMain.handle('ndi-start-receiver', async (event, { layerId, sourceIndex }) => {
   if (!ndi) throw new Error('NDI não disponível')
   await ndi.startReceiver(layerId, sourceIndex, (id, frame) => {
+    if (controllerWindow && !controllerWindow.isDestroyed()) {
+      controllerWindow.webContents.send('ndi-frame', {
+        layerId: id,
+        frame: { xres: frame.xres, yres: frame.yres, data: frame.data }
+      })
+    }
+
     Object.values(outputWindows).forEach(win => {
       if (!win.isDestroyed()) {
         win.webContents.send('ndi-frame', {
@@ -298,14 +654,14 @@ ipcMain.handle('record-stop', () => {
 // Recebe frame do renderer e envia para o stream FFmpeg
 ipcMain.on('stream-send-frame', (event, frameData) => {
   if (!stream) return
-  const buf = Buffer.from(frameData)
+  const buf = Buffer.from(frameData?.data || frameData)
   stream.sendStreamFrame(buf)
 })
 
 // Recebe frame e envia para gravação FFmpeg
 ipcMain.on('record-send-frame', (event, frameData) => {
   if (!stream) return
-  const buf = Buffer.from(frameData)
+  const buf = Buffer.from(frameData?.data || frameData)
   stream.sendRecordFrame(buf)
 })
 
@@ -318,73 +674,159 @@ ipcMain.on('record-send-frame', (event, frameData) => {
 // Letras de Música (SQLite)
 // ─────────────────────────────────────────────
 let db = null
-try {
-  const Database = require('better-sqlite3')
-  const path     = require('path')
-  const { app }  = require('electron')
-  const dbPath   = path.join(app.getPath('userData'), 'medialayers.db')
-  db = new Database(dbPath)
+let dbInitAttempted = false
+let dbFallbackNoticeShown = false
 
-  // Cria tabelas se não existirem
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS songs (
-      id      INTEGER PRIMARY KEY AUTOINCREMENT,
-      title   TEXT NOT NULL,
-      artist  TEXT,
-      slides  TEXT NOT NULL DEFAULT '[]',
-      created INTEGER DEFAULT (strftime('%s','now'))
-    );
-    CREATE TABLE IF NOT EXISTS bible_verses (
-      id      INTEGER PRIMARY KEY AUTOINCREMENT,
-      version TEXT NOT NULL,
-      book    TEXT NOT NULL,
-      chapter INTEGER NOT NULL,
-      verse   INTEGER NOT NULL,
-      text    TEXT NOT NULL,
-      UNIQUE(version, book, chapter, verse)
-    );
-    CREATE INDEX IF NOT EXISTS idx_bible ON bible_verses(version, book, chapter, verse);
-    CREATE INDEX IF NOT EXISTS idx_bible_text ON bible_verses(text);
-  `)
-  console.log('[DB] SQLite iniciado:', dbPath)
-} catch (e) {
-  console.warn('[DB] SQLite não disponível:', e.message)
+function getSongsFallbackPath() {
+  return path.join(app.getPath('userData'), 'songs-library.json')
+}
+
+function readSongsFallback() {
+  try {
+    const fallbackPath = getSongsFallbackPath()
+    if (!fs.existsSync(fallbackPath)) return []
+
+    const parsed = JSON.parse(fs.readFileSync(fallbackPath, 'utf8'))
+    return Array.isArray(parsed) ? parsed : []
+  } catch (error) {
+    console.warn('[DB] Falha ao ler biblioteca JSON:', error.message)
+    return []
+  }
+}
+
+function writeSongsFallback(songs) {
+  fs.writeFileSync(getSongsFallbackPath(), JSON.stringify(songs, null, 2))
+}
+
+function showDbFallbackNotice(error) {
+  if (dbFallbackNoticeShown) return
+  dbFallbackNoticeShown = true
+  console.log(`[DB] SQLite indisponivel neste ambiente; usando biblioteca JSON local. Motivo: ${error.message}`)
+}
+
+function ensureDatabase() {
+  if (dbInitAttempted) return db
+  dbInitAttempted = true
+
+  try {
+    const Database = require('better-sqlite3')
+    const dbPath = path.join(app.getPath('userData'), 'medialayers.db')
+    db = new Database(dbPath)
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS songs (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        title   TEXT NOT NULL,
+        artist  TEXT,
+        slides  TEXT NOT NULL DEFAULT '[]',
+        created INTEGER DEFAULT (strftime('%s','now'))
+      );
+      CREATE TABLE IF NOT EXISTS bible_verses (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        version TEXT NOT NULL,
+        book    TEXT NOT NULL,
+        chapter INTEGER NOT NULL,
+        verse   INTEGER NOT NULL,
+        text    TEXT NOT NULL,
+        UNIQUE(version, book, chapter, verse)
+      );
+      CREATE INDEX IF NOT EXISTS idx_bible ON bible_verses(version, book, chapter, verse);
+      CREATE INDEX IF NOT EXISTS idx_bible_text ON bible_verses(text);
+    `)
+
+    console.log('[DB] SQLite iniciado:', dbPath)
+    return db
+  } catch (error) {
+    db = null
+    showDbFallbackNotice(error)
+    return null
+  }
 }
 
 // Buscar todas as músicas
 ipcMain.handle('letras-get-all', () => {
-  if (!db) return []
-  return db.prepare('SELECT id, title, artist FROM songs ORDER BY title').all()
+  const database = ensureDatabase()
+  if (!database) {
+    return readSongsFallback()
+      .slice()
+      .sort((left, right) => left.title.localeCompare(right.title, 'pt-BR'))
+      .map(({ id, title, artist }) => ({ id, title, artist }))
+  }
+
+  return database.prepare('SELECT id, title, artist FROM songs ORDER BY title').all()
 })
 
 // Buscar uma música completa (com slides)
 ipcMain.handle('letras-get', (event, id) => {
-  if (!db) return null
-  const row = db.prepare('SELECT * FROM songs WHERE id = ?').get(id)
+  const database = ensureDatabase()
+  if (!database) {
+    return readSongsFallback().find((song) => String(song.id) === String(id)) || null
+  }
+
+  const row = database.prepare('SELECT * FROM songs WHERE id = ?').get(id)
   if (!row) return null
   return { ...row, slides: JSON.parse(row.slides || '[]') }
 })
 
 // Criar música
 ipcMain.handle('letras-create', (event, { title, artist, slides }) => {
-  if (!db) throw new Error('Banco não disponível.')
-  const stmt   = db.prepare('INSERT INTO songs (title, artist, slides) VALUES (?, ?, ?)')
+  const database = ensureDatabase()
+  if (!database) {
+    const songs = readSongsFallback()
+    const nextId = songs.reduce((maxId, song) => Math.max(maxId, Number(song.id) || 0), 0) + 1
+    const createdSong = {
+      id: nextId,
+      title,
+      artist: artist || '',
+      slides: Array.isArray(slides) ? slides : [],
+      created: Math.floor(Date.now() / 1000)
+    }
+
+    songs.push(createdSong)
+    writeSongsFallback(songs)
+    return createdSong
+  }
+
+  const stmt = database.prepare('INSERT INTO songs (title, artist, slides) VALUES (?, ?, ?)')
   const result = stmt.run(title, artist || '', JSON.stringify(slides || []))
   return { id: result.lastInsertRowid, title, artist, slides }
 })
 
 // Atualizar música
 ipcMain.handle('letras-update', (event, { id, title, artist, slides }) => {
-  if (!db) throw new Error('Banco não disponível.')
-  db.prepare('UPDATE songs SET title = ?, artist = ?, slides = ? WHERE id = ?')
+  const database = ensureDatabase()
+  if (!database) {
+    const songs = readSongsFallback()
+    const songIndex = songs.findIndex((song) => String(song.id) === String(id))
+    if (songIndex === -1) throw new Error('Musica nao encontrada.')
+
+    songs[songIndex] = {
+      ...songs[songIndex],
+      title,
+      artist: artist || '',
+      slides: Array.isArray(slides) ? slides : []
+    }
+
+    writeSongsFallback(songs)
+    return true
+  }
+
+  database.prepare('UPDATE songs SET title = ?, artist = ?, slides = ? WHERE id = ?')
     .run(title, artist || '', JSON.stringify(slides || []), id)
   return true
 })
 
 // Deletar música
 ipcMain.handle('letras-delete', (event, id) => {
-  if (!db) return
-  db.prepare('DELETE FROM songs WHERE id = ?').run(id)
+  const database = ensureDatabase()
+  if (!database) {
+    const songs = readSongsFallback().filter((song) => String(song.id) !== String(id))
+    writeSongsFallback(songs)
+    return true
+  }
+
+  database.prepare('DELETE FROM songs WHERE id = ?').run(id)
+  return true
 })
 
 
@@ -394,11 +836,12 @@ ipcMain.handle('letras-delete', (event, id) => {
 
 // Busca de versículos: primeiro no SQLite local, depois API pública
 ipcMain.handle('biblia-search', async (event, { type, book, chapter, verseStart, verseEnd, query, version }) => {
+  const database = ensureDatabase()
   // Tenta banco local primeiro
-  if (db) {
+  if (database) {
     if (type === 'reference') {
       const vEnd = verseEnd || verseStart
-      const rows = db.prepare(`
+      const rows = database.prepare(`
         SELECT book, chapter, verse, text
         FROM bible_verses
         WHERE version = ? AND book = ? AND chapter = ? AND verse BETWEEN ? AND ?
@@ -414,7 +857,7 @@ ipcMain.handle('biblia-search', async (event, { type, book, chapter, verseStart,
     }
 
     if (type === 'text' && query) {
-      const rows = db.prepare(`
+      const rows = database.prepare(`
         SELECT book, chapter, verse, text
         FROM bible_verses
         WHERE version = ? AND text LIKE ?
@@ -452,7 +895,7 @@ ipcMain.handle('biblia-search', async (event, { type, book, chapter, verseStart,
           text: v.text.trim()
         }))
         // Salva no banco local para cache
-        if (db) cacheVerses(db, version, results, book, chapter)
+        if (database) cacheVerses(database, version, results, book, chapter)
         return results
       }
     }
@@ -536,5 +979,7 @@ app.on('before-quit', async () => {
     await ndi.stopSender()
   }
   if (stream) stream.cleanup()
+  if (remoteIo) remoteIo.close()
+  if (remoteHttpServer) remoteHttpServer.close()
 })
 

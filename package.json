@@ -1,22 +1,35 @@
 {
   "name": "medialayers",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Software de apresentação com camadas de mídia para igrejas e eventos",
   "author": "MediaLayers Team",
   "license": "MIT",
+  "homepage": "https://github.com/Alexandre-Gervasio/medialayers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alexandre-Gervasio/medialayers.git"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "webrtc-server": "node webrtc-server.js",
     "build": "electron-builder",
     "build:win": "electron-builder --win nsis",
-    "build:win-portable": "electron-builder --win portable"
+    "build:win:publish": "electron-builder --win nsis --publish always",
+    "build:win:docker": "bash ./scripts/build-win-docker.sh",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3",
+    "rebuild:native:win": "electron-rebuild -f -w better-sqlite3 --arch=x64",
+    "ci:smoke": "node ./scripts/ci-smoke.js",
+    "release:check": "node ./scripts/release-check.js"
   },
   "dependencies": {
-    "better-sqlite3": "^9.4.3",
+    "electron-updater": "^6.6.2",
     "express": "^5.2.1",
     "golden-layout": "^2.6.0",
     "socket.io": "^4.8.3"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
@@ -26,6 +39,7 @@
   "build": {
     "appId": "com.medialayers.app",
     "productName": "MediaLayers",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
     "asar": true,
     "npmRebuild": false,
     "nodeGypRebuild": false,
@@ -42,6 +56,12 @@
         "from": "resources/ffmpeg.exe",
         "to": "ffmpeg.exe"
       }
-    ]
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "Alexandre-Gervasio",
+      "repo": "medialayers",
+      "releaseType": "release"
+    }
   }
 }
