@@ -3,4 +3,4 @@ resources/*.exe
 dist/
 build/
 .env
-src/ndi
+src/ndi/NDI.Lib.x64.dll
