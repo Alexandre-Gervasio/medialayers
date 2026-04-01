@@ -101,19 +101,22 @@ async function main() {
     }
 
     const propName = await page.inputValue('#prop-name')
-    if (!propName || !propName.includes('Bíblia')) {
-      throw new Error('Versículo não foi carregado no clip/layer atual')
+    if (!propName || !propName.includes('Layer')) {
+      throw new Error('Inspector não exibiu a layer master selecionada')
     }
 
-    await page.fill('#prop-x', '120')
-    await page.fill('#prop-y', '60')
-    await page.fill('#prop-width', '700')
-    await page.fill('#prop-height', '180')
+    const clipInfo = await page.textContent('#properties-panel .clip-editor p:nth-of-type(2)')
+    if (!clipInfo || !clipInfo.includes('Bíblia')) {
+      throw new Error('Versículo não foi carregado no clip selecionado')
+    }
 
-    const widthValue = await page.inputValue('#prop-width')
-    const heightValue = await page.inputValue('#prop-height')
-    if (widthValue !== '700' || heightValue !== '180') {
-      throw new Error('Transformações de tamanho não foram aplicadas no inspector')
+    await page.fill('#prop-opacity', '0.5')
+    await page.fill('#prop-volume', '0.4')
+    await page.selectOption('#prop-muted', 'true')
+
+    const mutedValue = await page.inputValue('#prop-muted')
+    if (mutedValue !== 'true') {
+      throw new Error('Controles master da layer não foram aplicados no inspector')
     }
 
     await waitForRemoteHealth()

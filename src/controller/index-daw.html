@@ -275,6 +275,18 @@
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 18px 36px rgba(0,0,0,0.18);
     }
 
+    .monitor-stage {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      flex: 1;
+      min-height: 0;
+    }
+
     .monitor-head {
       font-size: 11px;
       color: var(--muted);
@@ -289,7 +301,6 @@
       height: 100%;
       object-fit: contain;
       background: #000;
-      flex: 1;
       background-image: radial-gradient(circle at center, rgba(31, 182, 255, 0.06), transparent 60%);
     }
 
@@ -399,7 +410,7 @@
     .clip-grid-head,
     .clip-layer-row {
       display: grid;
-      grid-template-columns: 120px repeat(8, minmax(0, 1fr));
+      grid-template-columns: 220px repeat(8, minmax(0, 1fr));
       gap: 8px;
     }
 
@@ -449,6 +460,7 @@
       cursor: pointer;
       font-size: 13px;
       font-weight: 700;
+      padding: 10px;
     }
 
     .clip-layer-label.is-selected {
@@ -489,6 +501,42 @@
     }
 
     .clip-slot-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .layer-control-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .layer-control-stack label {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .layer-control-stack input[type="range"] {
+      width: 100%;
+    }
+
+    .layer-control-topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .layer-control-topline span {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+    }
+
+    .layer-control-buttons {
       display: flex;
       gap: 6px;
       flex-wrap: wrap;
@@ -873,7 +921,7 @@
       .quick-media-grid { grid-template-columns: 1fr; }
       .global-media-layout { grid-template-columns: 1fr; }
       .clip-grid-head,
-      .clip-layer-row { grid-template-columns: 120px repeat(4, minmax(140px, 1fr)); overflow-x: auto; }
+      .clip-layer-row { grid-template-columns: 220px repeat(4, minmax(140px, 1fr)); overflow-x: auto; }
     }
   </style>
 </head>

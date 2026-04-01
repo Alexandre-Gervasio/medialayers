@@ -5,8 +5,8 @@ if (typeof window !== 'undefined' && window.jQuery) {
 }
 
 const outputConfig = {
-  width: 1280,
-  height: 720,
+  width: 1920,
+  height: 1080,
   fps: 15
 }
 
@@ -121,7 +121,12 @@ function createLayer(type, name, extra = {}) {
 
 function createMixerLayer(rowIndex) {
   return createLayer('empty', `Layer ${rowIndex + 1}`, {
-    visible: false,
+    type: 'layer-master',
+    visible: true,
+    opacity: 1,
+    volume: 1,
+    muted: false,
+    solo: false,
     meta: { fixedRow: true, rowIndex }
   })
 }
@@ -340,7 +345,7 @@ function getLayerById(layerId) {
 }
 
 function getProgramLayers() {
-  return state.layers.filter((l) => state.programLayerIds.includes(l.id))
+  return getColumnComposite(state.liveColumnIndex)
 }
 
 function clamp(value, min, max) {
@@ -488,37 +493,85 @@ function reportRendererError(scope, error, extra = {}) {
   window.mediaLayers.telemetryReportError(payload)
 }
 
+function getSelectedMasterLayer() {
+  return getLayerById(state.selectedLayerId) || getMixerLayerByRow(state.activeMixerRow)
+}
+
+function getSoloRowIndexes() {
+  return state.layers
+    .filter((layer) => layer.meta?.fixedRow && layer.solo)
+    .map((layer) => Number(layer.meta?.rowIndex || 0))
+}
+
+function createClipPayload(rowIndex, columnIndex) {
+  const master = getMixerLayerByRow(rowIndex)
+  const clip = getClipAt(rowIndex, columnIndex)
+  const mediaItem = clip ? getMediaItemById(clip.mediaId) : null
+
+  if (!master || !mediaItem || !master.visible) return null
+
+  const soloRows = getSoloRowIndexes()
+  if (soloRows.length && !soloRows.includes(rowIndex)) return null
+
+  const payload = {
+    id: master.id,
+    cacheKey: mediaItem.id,
+    rowIndex,
+    columnIndex,
+    type: mediaItem.kind,
+    name: mediaItem.name,
+    visible: true,
+    opacity: Number(master.opacity ?? 1),
+    volume: master.muted ? 0 : Number(master.volume ?? 1),
+    muted: Boolean(master.muted),
+    solo: Boolean(master.solo),
+    text: mediaItem.text || '',
+    src: resolveMediaItemRuntimeSrc(mediaItem),
+    url: mediaItem.url || '',
+    sourceIndex: mediaItem.sourceIndex,
+    sourceName: mediaItem.sourceName,
+    loop: mediaItem.kind === 'video' || mediaItem.kind === 'audio',
+    fontColor: mediaItem.color || '#ffffff',
+    fontSize: mediaItem.fontSize || 54,
+    fontBg: mediaItem.fontBg || 'rgba(0,0,0,0.45)',
+    frame: mediaItem.kind === 'ndi' ? master.frame : null,
+    x: 0,
+    y: 0,
+    width: null,
+    height: null,
+    rotation: 0
+  }
+
+  return payload
+}
+
+function getColumnComposite(columnIndex) {
+  if (typeof columnIndex !== 'number' || columnIndex < 0) return []
+
+  return state.mixerLayerIds
+    .map((layerId, rowIndex) => createClipPayload(rowIndex, columnIndex))
+    .filter(Boolean)
+}
+
+function PreviewScreen() {
+  return getColumnComposite(state.activeColumnIndex)
+}
+
+function ProgramScreen() {
+  return getColumnComposite(state.liveColumnIndex)
+}
+
+function getClipGridSummary(columnIndex) {
+  const column = state.clipColumns[columnIndex]
+  if (!column) return 'Sem coluna selecionada'
+  const clipCount = column.clips.filter(Boolean).length
+  return `${column.name} • ${clipCount} clip(s)`
+}
+
 function notifyOutputLayers() {
   if (!window.mediaLayers) return
 
-  const programLayers = getProgramLayers().map((layer) => {
-    const payload = {
-      id: layer.id,
-      type: layer.type,
-      name: layer.name,
-      visible: layer.visible,
-      opacity: layer.opacity,
-      loop: !!layer.loop,
-      volume: typeof layer.volume === 'number' ? layer.volume : 1,
-      text: layer.text,
-      src: layer.src,
-      url: layer.url,
-      x: typeof layer.x === 'number' ? layer.x : 0,
-      y: typeof layer.y === 'number' ? layer.y : 0,
-      width: typeof layer.width === 'number' ? layer.width : null,
-      height: typeof layer.height === 'number' ? layer.height : null,
-      rotation: typeof layer.rotation === 'number' ? layer.rotation : 0,
-      fontColor: layer.color || '#ffffff',
-      fontSize: 52,
-      fontBg: 'rgba(0,0,0,0.45)'
-    }
-
-    if (layer.type === 'ndi' && layer.frame) {
-      payload.frame = layer.frame
-    }
-
-    return payload
-  })
+  const programLayers = getProgramLayers()
 
   window.mediaLayers.sendToOutput({ type: 'update-layers', layers: programLayers })
 }
@@ -631,85 +684,6 @@ async function stopLayerReceiverIfNeeded(layer) {
   layer.frame = null
 }
 
-async function resetMixerLayer(rowIndex) {
-  const layer = getMixerLayerByRow(rowIndex)
-  if (!layer) return
-
-  await stopLayerReceiverIfNeeded(layer)
-  const cleanLayer = createMixerLayer(rowIndex)
-
-  Object.assign(layer, {
-    ...cleanLayer,
-    id: layer.id,
-    meta: cleanLayer.meta,
-    element: null,
-    frame: null
-  })
-}
-
-async function applyMediaItemToLayer(item, layer) {
-  if (!item || !layer) return false
-
-  await stopLayerReceiverIfNeeded(layer)
-
-  layer.name = item.name
-  layer.mediaId = item.id
-  layer.visible = true
-  layer.opacity = typeof layer.opacity === 'number' ? layer.opacity : 1
-  layer.sourcePath = item.sourcePath || null
-  layer.src = resolveMediaItemRuntimeSrc(item)
-  layer.url = ''
-  layer.text = ''
-  layer.loop = false
-  layer.frame = null
-  layer.element = null
-
-  if (item.kind === 'image' || item.kind === 'video' || item.kind === 'audio') {
-    layer.type = item.kind
-    layer.loop = item.kind !== 'image'
-    layer.element = createMediaElementForLayer(layer)
-    return true
-  }
-
-  if (item.kind === 'text') {
-    layer.type = 'text'
-    layer.text = item.text || item.name
-    layer.color = item.color || '#ffffff'
-    layer.font = item.font || 'bold 44px Segoe UI'
-    return true
-  }
-
-  if (item.kind === 'browser') {
-    layer.type = 'browser'
-    layer.url = item.url || ''
-    return true
-  }
-
-  if (item.kind === 'ndi') {
-    if (!window.mediaLayers?.ndiFindSources) return false
-
-    const sources = await window.mediaLayers.ndiFindSources()
-    const selectedIndex = sources.findIndex((source, index) => {
-      if (item.sourceName) return source.name === item.sourceName
-      return index === Number(item.sourceIndex || 0)
-    })
-
-    if (selectedIndex < 0) {
-      renderToast(`Fonte NDI indisponível: ${item.name}`)
-      return false
-    }
-
-    layer.type = 'ndi'
-    layer.sourceIndex = selectedIndex
-    layer.name = item.name || `NDI ${sources[selectedIndex].name || selectedIndex}`
-    await window.mediaLayers.ndiStartReceiver({ layerId: layer.id, sourceIndex: selectedIndex })
-    state.ndiActiveReceivers[layer.id] = selectedIndex
-    return true
-  }
-
-  return false
-}
-
 function assignMediaToSlot(mediaId, rowIndex, columnIndex) {
   ensureClipColumns()
   const mediaItem = getMediaItemById(mediaId)
@@ -743,31 +717,37 @@ async function launchColumn(columnIndex) {
   const column = state.clipColumns[columnIndex]
   if (!column) return
 
-  const nextProgramLayerIds = []
-
   for (let rowIndex = 0; rowIndex < state.mixerLayerIds.length; rowIndex += 1) {
-    const clip = column.clips[rowIndex]
-    const layer = getMixerLayerByRow(rowIndex)
+    const master = getMixerLayerByRow(rowIndex)
+    const clip = getClipAt(rowIndex, columnIndex)
+    const mediaItem = clip ? getMediaItemById(clip.mediaId) : null
 
-    if (!clip || !layer) {
-      await resetMixerLayer(rowIndex)
-      continue
-    }
+    if (!master) continue
 
-    const mediaItem = getMediaItemById(clip.mediaId)
-    const applied = await applyMediaItemToLayer(mediaItem, layer)
-    if (applied) {
-      nextProgramLayerIds.push(layer.id)
+    if (mediaItem?.kind === 'ndi' && window.mediaLayers?.ndiStartReceiver) {
+      try {
+        const sources = await window.mediaLayers.ndiFindSources()
+        const sourceIndex = sources.findIndex((source, index) => {
+          if (mediaItem.sourceName) return source.name === mediaItem.sourceName
+          return index === Number(mediaItem.sourceIndex || 0)
+        })
+
+        if (sourceIndex >= 0) {
+          await window.mediaLayers.ndiStartReceiver({ layerId: master.id, sourceIndex })
+          state.ndiActiveReceivers[master.id] = sourceIndex
+        }
+      } catch (error) {
+        console.warn('[DAW] Falha ao iniciar receiver NDI da coluna', error)
+      }
     } else {
-      await resetMixerLayer(rowIndex)
+      await stopLayerReceiverIfNeeded(master)
     }
   }
 
   state.liveColumnIndex = columnIndex
   state.activeColumnIndex = columnIndex
-  state.programLayerIds = nextProgramLayerIds
   const selectedLayer = getMixerLayerByRow(state.activeMixerRow)
-  state.selectedLayerId = selectedLayer?.id || nextProgramLayerIds[0] || state.mixerLayerIds[0] || null
+  state.selectedLayerId = selectedLayer?.id || state.mixerLayerIds[0] || null
   state.previewLayerId = state.selectedLayerId
 
   renderTimelineOverview()
@@ -830,39 +810,64 @@ function renderClipLauncher() {
   const host = $('#clips-panel')
   if (!host.length) return
 
+  function LayerControls(rowIndex) {
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return ''
+
+    return `
+      <div class="layer-control-stack">
+        <div class="layer-control-topline">
+          <strong>${escapeHtml(master.name)}</strong>
+          <span>${master.solo ? 'SOLO' : master.muted ? 'MUTE' : 'LIVE'}</span>
+        </div>
+        <label>Opacity ${Math.round((master.opacity ?? 1) * 100)}%</label>
+        <input data-layer-opacity="${rowIndex}" type="range" min="0" max="100" step="1" value="${Math.round((master.opacity ?? 1) * 100)}" />
+        <label>Volume ${Math.round((master.volume ?? 1) * 100)}%</label>
+        <input data-layer-volume="${rowIndex}" type="range" min="0" max="100" step="1" value="${Math.round((master.volume ?? 1) * 100)}" />
+        <div class="layer-control-buttons">
+          <button class="btn small ${master.muted ? 'danger' : ''}" data-layer-mute="${rowIndex}">${master.muted ? 'Muted' : 'Mute'}</button>
+          <button class="btn small ${master.solo ? 'success' : ''}" data-layer-solo="${rowIndex}">${master.solo ? 'Solo ON' : 'Solo'}</button>
+        </div>
+      </div>
+    `
+  }
+
+  function ClipGrid() {
+    return state.mixerLayerIds.map((layerId, rowIndex) => {
+      const rowCells = state.clipColumns.map((column, columnIndex) => {
+        const clip = getClipAt(rowIndex, columnIndex)
+        const selected = state.activeMixerRow === rowIndex && state.activeColumnIndex === columnIndex
+        const live = state.liveColumnIndex === columnIndex
+        const active = live && Boolean(clip)
+
+        return `
+          <div class="clip-slot ${selected ? 'is-selected' : ''} ${active ? 'is-live' : ''}" data-clip-slot="${rowIndex}:${columnIndex}">
+            <strong>${escapeHtml(getClipLabel(clip))}</strong>
+            <span>${escapeHtml(getClipTypeLabel(clip))}</span>
+            <div class="clip-slot-actions">
+              <button class="btn small" data-assign-slot="${rowIndex}:${columnIndex}">Biblioteca</button>
+              <button class="btn small" data-clear-slot="${rowIndex}:${columnIndex}" ${clip ? '' : 'disabled'}>Limpar</button>
+            </div>
+          </div>
+        `
+      }).join('')
+
+      return `
+        <div class="clip-layer-row" data-layer-row="${rowIndex}">
+          <div class="clip-layer-label ${state.activeMixerRow === rowIndex ? 'is-selected' : ''}" data-select-row="${rowIndex}">
+            ${LayerControls(rowIndex)}
+          </div>
+          ${rowCells}
+        </div>
+      `
+    }).join('')
+  }
+
   const headerCells = state.clipColumns.map((column, index) => `
     <button class="clip-column-head ${state.activeColumnIndex === index ? 'is-selected' : ''} ${state.liveColumnIndex === index ? 'is-live' : ''}" data-column-head="${index}">
       ${escapeHtml(column.name)}
     </button>
   `).join('')
-
-  const rows = state.mixerLayerIds.map((layerId, rowIndex) => {
-    const rowCells = state.clipColumns.map((column, columnIndex) => {
-      const clip = getClipAt(rowIndex, columnIndex)
-      const selected = state.activeMixerRow === rowIndex && state.activeColumnIndex === columnIndex
-      const live = state.liveColumnIndex === columnIndex
-
-      return `
-        <div class="clip-slot ${selected ? 'is-selected' : ''} ${live ? 'is-live' : ''}" data-clip-slot="${rowIndex}:${columnIndex}">
-          <strong>${escapeHtml(getClipLabel(clip))}</strong>
-          <span>${escapeHtml(getClipTypeLabel(clip))}</span>
-          <div class="clip-slot-actions">
-            <button class="btn small" data-assign-slot="${rowIndex}:${columnIndex}">Biblioteca</button>
-            <button class="btn small" data-clear-slot="${rowIndex}:${columnIndex}" ${clip ? '' : 'disabled'}>Limpar</button>
-          </div>
-        </div>
-      `
-    }).join('')
-
-    return `
-      <div class="clip-layer-row" data-layer-row="${rowIndex}">
-        <button class="clip-layer-label ${state.activeMixerRow === rowIndex ? 'is-selected' : ''}" data-select-row="${rowIndex}">
-          Layer ${rowIndex + 1}
-        </button>
-        ${rowCells}
-      </div>
-    `
-  }).join('')
 
   host.html(`
     <div class="clip-launcher-shell">
@@ -874,10 +879,10 @@ function renderClipLauncher() {
         <button id="clips-open-library" class="btn">Inserir mídia</button>
       </div>
       <div class="clip-grid-head">
-        <div class="clip-grid-corner">Layers</div>
+        <div class="clip-grid-corner">Layer Controls</div>
         ${headerCells}
       </div>
-      <div class="clip-grid-body">${rows}</div>
+      <div class="clip-grid-body">${ClipGrid()}</div>
     </div>
   `)
 
@@ -887,7 +892,6 @@ function renderClipLauncher() {
 
   host.find('[data-column-head]').on('click', async (event) => {
     const columnIndex = Number($(event.currentTarget).attr('data-column-head'))
-    setActiveClipCell(state.activeMixerRow, columnIndex)
     await launchColumn(columnIndex)
   })
 
@@ -915,6 +919,52 @@ function renderClipLauncher() {
       columnIndex: state.activeColumnIndex,
       source: 'clips'
     })
+  })
+
+  host.find('[data-layer-opacity]').on('input', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-opacity'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.opacity = Number(event.target.value) / 100
+    renderClipLauncher()
+    renderPropertiesPanel()
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-volume]').on('input', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-volume'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.volume = Number(event.target.value) / 100
+    renderClipLauncher()
+    renderPropertiesPanel()
+    notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-mute]').on('click', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-mute'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.muted = !master.muted
+    renderClipLauncher()
+    renderPropertiesPanel()
+    notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-solo]').on('click', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-solo'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.solo = !master.solo
+    renderClipLauncher()
+    renderPropertiesPanel()
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+    scheduleSessionCache()
   })
 }
 
@@ -1124,7 +1174,69 @@ function drawTransformOverlay(canvasId, layerId) {
   ctx.restore()
 }
 
-function renderCanvasForLayerIds(canvasId, layerIds) {
+function getMediaPreviewCache() {
+  if (!state.mediaPreviewCache) state.mediaPreviewCache = {}
+  return state.mediaPreviewCache
+}
+
+function ensurePreviewMediaElement(layer) {
+  const cache = getMediaPreviewCache()
+  const cacheKey = `${layer.type}:${layer.cacheKey || layer.id}`
+  if (cache[cacheKey]) return cache[cacheKey]
+
+  const element = createMediaElementForLayer(layer)
+  cache[cacheKey] = element
+  return element
+}
+
+function drawCompositeLayer(ctx, layer, canvas) {
+  if (!layer?.visible) return
+
+  ctx.save()
+  ctx.globalAlpha = Math.max(0, Math.min(1, Number(layer.opacity ?? 1)))
+
+  if (layer.type === 'image' || layer.type === 'video') {
+    const element = ensurePreviewMediaElement(layer)
+    if (element && element.readyState !== 0) {
+      drawLayerBox(ctx, element, getLayerBounds(layer, canvas))
+    }
+  } else if (layer.type === 'ndi') {
+    drawNdiLayer(ctx, layer, canvas)
+  } else if (layer.type === 'text') {
+    const bounds = getLayerBounds(layer, canvas)
+    ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    ctx.fillStyle = layer.fontColor || '#ffffff'
+    ctx.font = 'bold 46px Segoe UI'
+    drawWrappedText(ctx, layer.text || layer.name, bounds, 54)
+  } else if (layer.type === 'audio') {
+    const bounds = getLayerBounds(layer, canvas)
+    ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    ctx.fillStyle = '#111f31'
+    ctx.fillRect(-bounds.width / 2, -bounds.height / 2, bounds.width, bounds.height)
+    ctx.fillStyle = '#e7eef9'
+    ctx.font = 'bold 26px Segoe UI'
+    ctx.fillText(`Audio • ${layer.name}`, -bounds.width / 2 + 20, 0)
+    ctx.font = '14px Segoe UI'
+    ctx.fillStyle = '#9fb3cc'
+    ctx.fillText(`Volume ${Math.round((layer.volume ?? 1) * 100)}% ${layer.muted ? '• Muted' : ''}`, -bounds.width / 2 + 20, 32)
+  } else if (layer.type === 'browser') {
+    const bounds = getLayerBounds(layer, canvas)
+    ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    ctx.fillStyle = '#0f2f46'
+    ctx.fillRect(-bounds.width / 2, -bounds.height / 2, bounds.width, bounds.height)
+    ctx.fillStyle = '#9fd4ff'
+    ctx.font = 'bold 20px Segoe UI'
+    ctx.fillText('Browser Source', -bounds.width / 2 + 20, -bounds.height / 2 + 30)
+    ctx.fillStyle = '#e7eef9'
+    ctx.font = '14px monospace'
+    drawWrappedText(ctx, layer.url || '', bounds, 20)
+  }
+
+  ctx.restore()
+  ctx.globalAlpha = 1
+}
+
+function renderCanvasForEntries(canvasId, entries) {
   const canvas = document.getElementById(canvasId)
   if (!canvas) return
   const ctx = canvas.getContext('2d')
@@ -1132,24 +1244,15 @@ function renderCanvasForLayerIds(canvasId, layerIds) {
 
   clearCanvas(canvas, ctx)
 
-  layerIds
-    .map((id) => getLayerById(id))
-    .filter(Boolean)
-    .forEach((layer) => drawLayer(ctx, layer, canvas))
-
-  if (canvasId === 'preview-canvas' && state.selectedLayerId && state.previewLayerId === state.selectedLayerId) {
-    drawTransformOverlay(canvasId, state.selectedLayerId)
-  }
+  entries.forEach((layer) => drawCompositeLayer(ctx, layer, canvas))
 }
 
 function renderSwitcherMonitors() {
-  const previewId = state.previewLayerId
-  const previewLayers = previewId ? [previewId] : []
-  renderCanvasForLayerIds('preview-canvas', previewLayers)
-  renderCanvasForLayerIds('program-canvas', state.programLayerIds)
+  renderCanvasForEntries('preview-canvas', PreviewScreen())
+  renderCanvasForEntries('program-canvas', ProgramScreen())
 
-  $('#preview-state').text(previewId ? `Preview: layer ${previewId}` : 'Preview: vazio')
-  $('#program-state').text(state.programLayerIds.length ? `Program: ${state.programLayerIds.join(', ')}` : 'Program: vazio')
+  $('#preview-state').text(`Preview • ${getClipGridSummary(state.activeColumnIndex)}`)
+  $('#program-state').text(state.liveColumnIndex === null ? 'Program • vazio' : `Program • ${getClipGridSummary(state.liveColumnIndex)}`)
 }
 
 function sendCompositeFrameToNdi() {
@@ -1285,61 +1388,30 @@ function renderLayerList() {
   const list = $('#layer-list')
   if (!list.length) return
 
-  list.empty()
+  if (!state.mediaLibrary.length) {
+    list.html('<li class="empty-state compact">Biblioteca global vazia. Use o overlay para importar mídias persistentes.</li>')
+    updateToolbarLabel()
+    return
+  }
 
-  state.layers.forEach((layer) => {
-    const isFixedRow = Boolean(layer.meta?.fixedRow)
-    const rowLabel = isFixedRow ? `Layer ${Number(layer.meta?.rowIndex || 0) + 1}` : `Layer ${layer.id}`
-    const inProgram = state.programLayerIds.includes(layer.id)
-    const isPreview = state.previewLayerId === layer.id
-    const item = $(`
-      <li class="layer-item ${layer.id === state.selectedLayerId ? 'selected' : ''}" data-layer-id="${layer.id}">
-        <div class="layer-row">
-          <strong>${escapeHtml(rowLabel)} - ${escapeHtml(layer.name)}</strong>
-          <span style="font-size:11px;color:#9fb3cc;">${layer.type}</span>
+  list.html(state.mediaLibrary.map((item) => `
+    <li class="layer-item ${getClipAt(state.activeMixerRow, state.activeColumnIndex)?.mediaId === item.id ? 'selected' : ''}" data-library-id="${item.id}">
+      <div class="layer-row">
+        <strong>${escapeHtml(item.name)}</strong>
+        <span style="font-size:11px;color:#9fb3cc;">${escapeHtml(String(item.kind || '').toUpperCase())}</span>
+      </div>
+      <div class="layer-row" style="margin-top:8px;">
+        <span style="font-size:11px;color:#9fb3cc;">Destino: layer ${state.activeMixerRow + 1}, coluna ${state.activeColumnIndex + 1}</span>
+        <div class="layer-actions">
+          <button class="btn small" data-library-assign="${item.id}">Usar</button>
         </div>
-        <div class="layer-row" style="margin-top:8px;">
-          <span style="font-size:11px;color:#9fb3cc;">${inProgram ? 'ON AIR' : isPreview ? 'PREVIEW' : 'IDLE'}${isFixedRow ? ' • BASE' : ''}</span>
-          <div class="layer-actions">
-            <button class="btn small" data-action="cue">Cue</button>
-            <button class="btn small" data-action="take">Take</button>
-            <button class="btn small" data-action="toggle">Prog</button>
-            <button class="btn small" data-action="remove" ${isFixedRow ? 'disabled' : ''}>X</button>
-          </div>
-        </div>
-      </li>
-    `)
+      </div>
+    </li>
+  `).join(''))
 
-    item.on('click', (event) => {
-      if ($(event.target).is('button')) return
-      state.selectedLayerId = layer.id
-      renderLayerList()
-      renderPropertiesPanel()
-      updateToolbarLabel()
-    })
-
-    item.find('[data-action="cue"]').on('click', (event) => {
-      event.stopPropagation()
-      cueLayer(layer.id)
-    })
-
-    item.find('[data-action="take"]').on('click', (event) => {
-      event.stopPropagation()
-      takeLayer(layer.id)
-    })
-
-    item.find('[data-action="toggle"]').on('click', (event) => {
-      event.stopPropagation()
-      toggleLayerOnProgram(layer.id)
-    })
-
-    item.find('[data-action="remove"]').on('click', (event) => {
-      event.stopPropagation()
-      if (isFixedRow) return
-      removeLayer(layer.id)
-    })
-
-    list.append(item)
+  list.find('[data-library-assign]').on('click', (event) => {
+    event.stopPropagation()
+    assignMediaToSlot(Number($(event.currentTarget).attr('data-library-assign')), state.activeMixerRow, state.activeColumnIndex)
   })
 
   updateToolbarLabel()
@@ -1349,18 +1421,21 @@ function renderPropertiesPanel() {
   const panel = $('#properties-panel')
   if (!panel.length) return
 
-  const layer = getLayerById(state.selectedLayerId)
+  const layer = getSelectedMasterLayer()
   if (!layer) {
     panel.html('<p>Selecione uma layer.</p>')
     return
   }
 
+  const selectedClip = getClipAt(state.activeMixerRow, state.activeColumnIndex)
+  const selectedMedia = selectedClip ? getMediaItemById(selectedClip.mediaId) : null
+
   panel.html(`
     <div class="properties-panel">
-      <label>Nome</label>
+      <label>Layer master</label>
       <input id="prop-name" type="text" value="${escapeHtml(layer.name)}" />
 
-      <label>Visivel</label>
+      <label>Ativa</label>
       <select id="prop-visible">
         <option value="true" ${layer.visible ? 'selected' : ''}>Sim</option>
         <option value="false" ${!layer.visible ? 'selected' : ''}>Nao</option>
@@ -1371,51 +1446,37 @@ function renderPropertiesPanel() {
 
       <div class="inline-grid double">
         <div>
-          <label>Posição X</label>
-          <input id="prop-x" type="number" step="1" value="${Number(layer.x || 0)}" />
+          <label>Volume</label>
+          <input id="prop-volume" type="range" min="0" max="1" step="0.05" value="${Number(layer.volume ?? 1)}" />
         </div>
         <div>
-          <label>Posição Y</label>
-          <input id="prop-y" type="number" step="1" value="${Number(layer.y || 0)}" />
-        </div>
-      </div>
-
-      <div class="inline-grid double">
-        <div>
-          <label>Largura</label>
-          <input id="prop-width" type="number" min="1" step="1" value="${layer.width ?? ''}" placeholder="auto" />
-        </div>
-        <div>
-          <label>Altura</label>
-          <input id="prop-height" type="number" min="1" step="1" value="${layer.height ?? ''}" placeholder="auto" />
-        </div>
-      </div>
-
-      <div class="inline-grid double">
-        <div>
-          <label>Rotação (graus)</label>
-          <input id="prop-rotation" type="number" step="1" value="${Number(layer.rotation || 0)}" />
-        </div>
-        <div>
-          <label>Escala proporcional</label>
-          <select id="prop-preserve-aspect">
-            <option value="true" ${layer.preserveAspect !== false ? 'selected' : ''}>Sim</option>
-            <option value="false" ${layer.preserveAspect === false ? 'selected' : ''}>Não</option>
+          <label>Mute</label>
+          <select id="prop-muted">
+            <option value="false" ${!layer.muted ? 'selected' : ''}>Não</option>
+            <option value="true" ${layer.muted ? 'selected' : ''}>Sim</option>
           </select>
         </div>
       </div>
 
-      <button id="prop-reset-transform" class="btn" type="button">Resetar posição e tamanho</button>
+      <div class="inline-grid double">
+        <div>
+          <label>Solo</label>
+          <select id="prop-solo">
+            <option value="false" ${!layer.solo ? 'selected' : ''}>Não</option>
+            <option value="true" ${layer.solo ? 'selected' : ''}>Sim</option>
+          </select>
+        </div>
+        <div>
+          <label>Coluna selecionada</label>
+          <input type="text" value="${escapeHtml(getClipGridSummary(state.activeColumnIndex))}" disabled />
+        </div>
+      </div>
 
-      ${layer.type === 'text' ? `
-        <label>Texto</label>
-        <textarea id="prop-text" rows="4">${escapeHtml(layer.text || '')}</textarea>
-      ` : ''}
-
-      ${layer.type === 'browser' ? `
-        <label>URL</label>
-        <input id="prop-url" type="text" value="${escapeHtml(layer.url || '')}" />
-      ` : ''}
+      <div class="clip-editor" style="min-height:auto; margin-top: 8px;">
+        <p style="margin:0 0 6px; font-size:12px; color:#9fb3cc;">Clip selecionado</p>
+        <p style="margin:0; font-size:13px; color:#e7eef9;">${escapeHtml(selectedMedia?.name || 'Nenhum clip selecionado')}</p>
+        <p style="margin:6px 0 0; font-size:12px; color:#9fb3cc;">${escapeHtml(selectedMedia?.kind ? String(selectedMedia.kind).toUpperCase() : 'SEM CLIP')}</p>
+      </div>
     </div>
   `)
 
@@ -1438,68 +1499,24 @@ function renderPropertiesPanel() {
     notifyOutputLayers()
   })
 
-  $('#prop-x').on('input', (event) => {
-    layer.x = Number(event.target.value || 0)
-    renderSwitcherMonitors()
+  $('#prop-volume').on('input', (event) => {
+    layer.volume = Number(event.target.value)
+    renderClipLauncher()
     notifyOutputLayers()
   })
 
-  $('#prop-y').on('input', (event) => {
-    layer.y = Number(event.target.value || 0)
-    renderSwitcherMonitors()
+  $('#prop-muted').on('change', (event) => {
+    layer.muted = event.target.value === 'true'
+    renderClipLauncher()
     notifyOutputLayers()
   })
 
-  $('#prop-width').on('input', (event) => {
-    const value = String(event.target.value || '').trim()
-    layer.width = value ? Number(value) : null
+  $('#prop-solo').on('change', (event) => {
+    layer.solo = event.target.value === 'true'
+    renderClipLauncher()
     renderSwitcherMonitors()
     notifyOutputLayers()
   })
-
-  $('#prop-height').on('input', (event) => {
-    const value = String(event.target.value || '').trim()
-    layer.height = value ? Number(value) : null
-    renderSwitcherMonitors()
-    notifyOutputLayers()
-  })
-
-  $('#prop-rotation').on('input', (event) => {
-    layer.rotation = Number(event.target.value || 0)
-    renderSwitcherMonitors()
-    notifyOutputLayers()
-  })
-
-  $('#prop-preserve-aspect').on('change', (event) => {
-    layer.preserveAspect = event.target.value === 'true'
-  })
-
-  $('#prop-reset-transform').on('click', () => {
-    layer.x = 0
-    layer.y = 0
-    layer.width = null
-    layer.height = null
-    layer.rotation = 0
-    renderPropertiesPanel()
-    renderSwitcherMonitors()
-    notifyOutputLayers()
-  })
-
-  if (layer.type === 'text') {
-    $('#prop-text').on('input', (event) => {
-      layer.text = event.target.value
-      renderSwitcherMonitors()
-      notifyOutputLayers()
-    })
-  }
-
-  if (layer.type === 'browser') {
-    $('#prop-url').on('input', (event) => {
-      layer.url = event.target.value
-      renderSwitcherMonitors()
-      notifyOutputLayers()
-    })
-  }
 
   panel.find('input, select, textarea').on('input.session-cache change.session-cache', () => {
     scheduleSessionCache()
@@ -2442,7 +2459,7 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('inputs', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Entradas</div>
+        <div class="panel-title">Biblioteca Global</div>
         <div id="drop-zone" class="drop-zone">Arraste arquivos aqui para alimentar a biblioteca global persistente</div>
         <ul id="layer-list" class="layer-list"></ul>
       </div>
@@ -2455,37 +2472,38 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('switcher', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Mesa de corte</div>
+        <div class="panel-title">Preview / Program 1920x1080</div>
         <div class="switcher-wrap">
           <div class="monitor">
             <div class="monitor-head" id="preview-state">Preview</div>
-            <canvas id="preview-canvas" width="1280" height="720"></canvas>
+            <div class="monitor-stage"><canvas id="preview-canvas" width="1920" height="1080"></canvas></div>
           </div>
           <div class="monitor">
             <div class="monitor-head" id="program-state">Program</div>
-            <canvas id="program-canvas" width="1280" height="720"></canvas>
+            <div class="monitor-stage"><canvas id="program-canvas" width="1920" height="1080"></canvas></div>
           </div>
         </div>
         <div class="switcher-actions">
-          <button id="btn-cut" class="btn">Cut</button>
+          <button id="btn-cut" class="btn">Disparar coluna selecionada</button>
           <button id="btn-clear-program" class="btn">Clear Program</button>
         </div>
       </div>
     `)
 
     $('#btn-cut').on('click', () => {
-      if (state.previewLayerId) takeLayer(state.previewLayerId)
+      launchColumn(state.activeColumnIndex).catch((error) => {
+        console.error('[DAW] Falha ao disparar coluna', error)
+      })
     })
 
     $('#btn-clear-program').on('click', () => {
-      state.programLayerIds = []
-      renderLayerList()
+      state.liveColumnIndex = null
+      renderClipLauncher()
       renderSwitcherMonitors()
       notifyOutputLayers()
     })
 
     renderSwitcherMonitors()
-    registerPreviewInteractions()
   })
 
   goldenLayout.registerComponent('program', function(container) {
@@ -2654,13 +2672,14 @@ function registerRemoteCommands() {
   window.mediaLayers.onRemoteCommand((command) => {
     if (!command || !state.remoteEnabled) return
 
-    if (command.type === 'take' && state.previewLayerId) {
-      takeLayer(state.previewLayerId)
+    if (command.type === 'take') {
+      launchColumn(state.activeColumnIndex).catch((error) => {
+        console.error('[DAW] Falha ao disparar coluna via controle remoto', error)
+      })
       return
     }
 
     if (command.type === 'clear') {
-      state.programLayerIds = []
       state.liveColumnIndex = null
       renderTimelineOverview()
       renderClipLauncher()
@@ -2672,18 +2691,18 @@ function registerRemoteCommands() {
     }
 
     if (command.type === 'next') {
-      if (!state.layers.length) return
-      const currentIndex = state.layers.findIndex((l) => l.id === state.previewLayerId)
-      const nextIndex = (currentIndex + 1) % state.layers.length
-      cueLayer(state.layers[nextIndex].id)
+      if (!state.clipColumns.length) return
+      const nextIndex = (state.activeColumnIndex + 1) % state.clipColumns.length
+      setActiveClipCell(state.activeMixerRow, nextIndex)
+      renderSwitcherMonitors()
       return
     }
 
     if (command.type === 'prev') {
-      if (!state.layers.length) return
-      const currentIndex = state.layers.findIndex((l) => l.id === state.previewLayerId)
-      const prevIndex = currentIndex <= 0 ? state.layers.length - 1 : currentIndex - 1
-      cueLayer(state.layers[prevIndex].id)
+      if (!state.clipColumns.length) return
+      const prevIndex = state.activeColumnIndex <= 0 ? state.clipColumns.length - 1 : state.activeColumnIndex - 1
+      setActiveClipCell(state.activeMixerRow, prevIndex)
+      renderSwitcherMonitors()
     }
   })
 }

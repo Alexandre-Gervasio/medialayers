@@ -21,6 +21,17 @@ function applyLayerPosition(wrapper, layer) {
   wrapper.style.height = height
 }
 
+function getLayerSignature(layer) {
+  return [
+    layer.type,
+    layer.src || '',
+    layer.url || '',
+    layer.text || '',
+    layer.cacheKey || '',
+    layer.muted ? 'muted' : 'live'
+  ].join('|')
+}
+
 // ─────────────────────────────────────────────
 // BROADCAST CHANNEL — câmeras locais
 // ─────────────────────────────────────────────
@@ -235,17 +246,34 @@ function renderLayers(layers) {
 function renderMediaLayer(layer, zIndex) {
   if (activeElements[layer.id]) {
     const wrapper = activeElements[layer.id];
+    const nextSignature = getLayerSignature(layer)
+    if (wrapper.dataset.signature !== nextSignature) {
+      wrapper.remove()
+      delete activeElements[layer.id]
+      return renderMediaLayer(layer, zIndex)
+    }
     wrapper.style.opacity = layer.visible ? layer.opacity : 0;
     wrapper.style.zIndex = zIndex + 1;
     applyLayerPosition(wrapper, layer);
     const video = wrapper.querySelector('video');
-    if (video) { video.loop = layer.loop; video.volume = layer.volume ?? 1; }
+    if (video) {
+      video.loop = layer.loop;
+      video.volume = layer.volume ?? 1;
+      video.muted = Boolean(layer.muted);
+    }
+    const audio = wrapper.querySelector('audio');
+    if (audio) {
+      audio.loop = layer.loop;
+      audio.volume = layer.volume ?? 1;
+      audio.muted = Boolean(layer.muted);
+    }
     return;
   }
 
   const wrapper = document.createElement('div');
   wrapper.className = 'output-layer';
   wrapper.dataset.id = layer.id;
+  wrapper.dataset.signature = getLayerSignature(layer)
   wrapper.style.zIndex = zIndex + 1;
   wrapper.style.opacity = layer.visible ? layer.opacity : 0;
   applyLayerPosition(wrapper, layer);
@@ -253,7 +281,7 @@ function renderMediaLayer(layer, zIndex) {
   if (layer.type === 'video' && layer.src) {
     const video = document.createElement('video');
     video.src = layer.src; video.loop = layer.loop;
-    video.volume = layer.volume ?? 1; video.autoplay = true; video.playsInline = true;
+    video.volume = layer.volume ?? 1; video.autoplay = true; video.playsInline = true; video.muted = Boolean(layer.muted);
     wrapper.appendChild(video);
     video.play().catch(() => {});
   }
@@ -267,7 +295,7 @@ function renderMediaLayer(layer, zIndex) {
   if (layer.type === 'audio' && layer.src) {
     const audio = document.createElement('audio');
     audio.src = layer.src; audio.loop = layer.loop;
-    audio.volume = layer.volume ?? 1; audio.autoplay = true;
+    audio.volume = layer.volume ?? 1; audio.autoplay = true; audio.muted = Boolean(layer.muted);
     wrapper.appendChild(audio);
     audio.play().catch(() => {});
   }
