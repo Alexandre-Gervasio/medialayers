@@ -28,6 +28,36 @@ let remoteIo = null
 let remoteControlInfo = { port: 3900, urls: [] }
 let updateHandlersRegistered = false
 const GITHUB_RELEASES_BASE_URL = 'https://github.com/Alexandre-Gervasio/medialayers/releases'
+const BIBLE_BOOKS = [
+  'Gênesis', 'Êxodo', 'Levítico', 'Números', 'Deuteronômio', 'Josué', 'Juízes', 'Rute',
+  '1 Samuel', '2 Samuel', '1 Reis', '2 Reis', '1 Crônicas', '2 Crônicas', 'Esdras', 'Neemias',
+  'Ester', 'Jó', 'Salmos', 'Provérbios', 'Eclesiastes', 'Cantares', 'Isaías', 'Jeremias',
+  'Lamentações', 'Ezequiel', 'Daniel', 'Oséias', 'Joel', 'Amós', 'Obadias', 'Jonas', 'Miquéias',
+  'Naum', 'Habacuque', 'Sofonias', 'Ageu', 'Zacarias', 'Malaquias', 'Mateus', 'Marcos', 'Lucas',
+  'João', 'Atos', 'Romanos', '1 Coríntios', '2 Coríntios', 'Gálatas', 'Efésios', 'Filipenses',
+  'Colossenses', '1 Tessalonicenses', '2 Tessalonicenses', '1 Timóteo', '2 Timóteo', 'Tito',
+  'Filemom', 'Hebreus', 'Tiago', '1 Pedro', '2 Pedro', '1 João', '2 João', '3 João', 'Judas', 'Apocalipse'
+]
+const PUBLIC_BIBLE_SOURCES = {
+  AA: {
+    version: 'AA',
+    label: 'Almeida Atualizada',
+    sourceType: 'public-json',
+    url: 'https://raw.githubusercontent.com/thiagobodruk/bible/master/json/pt_aa.json'
+  },
+  ACF: {
+    version: 'ACF',
+    label: 'Almeida Corrigida Fiel',
+    sourceType: 'public-json',
+    url: 'https://raw.githubusercontent.com/thiagobodruk/bible/master/json/pt_acf.json'
+  }
+}
+const MANUAL_BIBLE_VERSIONS = {
+  NVI: { version: 'NVI', label: 'Nova Versão Internacional' },
+  ARA: { version: 'ARA', label: 'Almeida Revista e Atualizada' },
+  NTLH: { version: 'NTLH', label: 'Nova Tradução na Linguagem de Hoje' },
+  KJA: { version: 'KJA', label: 'King James Atualizada' }
+}
 
 const UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'update-config.json')
 const TELEMETRY_LOG_PATH = path.join(app.getPath('userData'), 'telemetry-errors.log')
@@ -1133,6 +1163,93 @@ ipcMain.handle('biblia-search', async (event, { type, book, chapter, verseStart,
   return []
 })
 
+ipcMain.handle('biblia-list-versions', () => {
+  return getBibleCatalog()
+})
+
+ipcMain.handle('biblia-download', async (event, version) => {
+  const normalizedVersion = normalizeBibleVersion(version)
+  const database = ensureDatabase()
+  if (!database) {
+    throw new Error('SQLite indisponível neste ambiente; não foi possível baixar a Bíblia offline.')
+  }
+
+  const versionsToDownload = normalizedVersion === 'ALL-PUBLIC'
+    ? Object.keys(PUBLIC_BIBLE_SOURCES)
+    : [normalizedVersion]
+
+  const results = []
+
+  for (const currentVersion of versionsToDownload) {
+    const source = PUBLIC_BIBLE_SOURCES[currentVersion]
+    if (!source) {
+      throw new Error(`A versão ${currentVersion} não possui fonte pública integrada. Use a importação manual.`)
+    }
+
+    sendBibleProgress({ stage: 'baixando', version: currentVersion, message: `Baixando ${source.label}...` })
+    const payload = await httpGet(source.url)
+    const parsed = JSON.parse(payload)
+
+    const result = importBibleJsonPayload(database, currentVersion, parsed, (progress) => {
+      sendBibleProgress({
+        ...progress,
+        message: `Importando ${source.label}: livro ${progress.processedBooks}/${progress.totalBooks}`
+      })
+    })
+
+    sendBibleProgress({
+      stage: 'concluido',
+      version: currentVersion,
+      verseCount: result.verseCount,
+      message: `${source.label} disponível offline.`
+    })
+
+    results.push(result)
+  }
+
+  return normalizedVersion === 'ALL-PUBLIC' ? results : results[0]
+})
+
+ipcMain.handle('biblia-import-json', async (event, version) => {
+  const normalizedVersion = normalizeBibleVersion(version)
+  const database = ensureDatabase()
+  if (!database) {
+    throw new Error('SQLite indisponível neste ambiente; não foi possível importar a Bíblia offline.')
+  }
+
+  const response = await dialog.showOpenDialog(controllerWindow, {
+    title: `Importar Bíblia ${normalizedVersion}`,
+    filters: [{ name: 'JSON bíblico', extensions: ['json'] }],
+    properties: ['openFile']
+  })
+
+  if (response.canceled || !response.filePaths?.length) {
+    return { canceled: true }
+  }
+
+  const selectedPath = response.filePaths[0]
+  const payload = JSON.parse(fs.readFileSync(selectedPath, 'utf8'))
+  sendBibleProgress({ stage: 'importando', version: normalizedVersion, message: `Importando ${path.basename(selectedPath)}...` })
+  const result = importBibleJsonPayload(database, normalizedVersion, payload, (progress) => {
+    sendBibleProgress({
+      ...progress,
+      message: `Importando ${normalizedVersion}: livro ${progress.processedBooks}/${progress.totalBooks}`
+    })
+  })
+  sendBibleProgress({
+    stage: 'concluido',
+    version: normalizedVersion,
+    verseCount: result.verseCount,
+    message: `${normalizedVersion} importada com sucesso.`
+  })
+
+  return {
+    ...result,
+    filePath: selectedPath,
+    canceled: false
+  }
+})
+
 // ─── Helpers internos ────────────────────────
 
 function httpGet(url) {
@@ -1161,6 +1278,140 @@ function cacheVerses(db, version, verses, book, chapter) {
     })
     insertMany(verses)
   } catch {}
+}
+
+function sendBibleProgress(payload) {
+  if (!controllerWindow || controllerWindow.isDestroyed()) return
+  controllerWindow.webContents.send('biblia-download-progress', payload)
+}
+
+function normalizeBibleVersion(version) {
+  return String(version || '').trim().toUpperCase()
+}
+
+function getBibleCatalog(database = ensureDatabase()) {
+  const countsByVersion = {}
+
+  if (database) {
+    database.prepare(`
+      SELECT version, COUNT(*) AS verseCount
+      FROM bible_verses
+      GROUP BY version
+    `).all().forEach((row) => {
+      countsByVersion[normalizeBibleVersion(row.version)] = Number(row.verseCount || 0)
+    })
+  }
+
+  const publicEntries = Object.values(PUBLIC_BIBLE_SOURCES).map((source) => {
+    const verseCount = countsByVersion[source.version] || 0
+    return {
+      version: source.version,
+      label: source.label,
+      downloadable: true,
+      importable: true,
+      sourceType: source.sourceType,
+      verseCount,
+      isOfflineReady: verseCount > 30000
+    }
+  })
+
+  const manualEntries = Object.values(MANUAL_BIBLE_VERSIONS).map((source) => {
+    const verseCount = countsByVersion[source.version] || 0
+    return {
+      version: source.version,
+      label: source.label,
+      downloadable: false,
+      importable: true,
+      sourceType: 'manual-import',
+      verseCount,
+      isOfflineReady: verseCount > 30000
+    }
+  })
+
+  const importedOnly = Object.entries(countsByVersion)
+    .filter(([version]) => !PUBLIC_BIBLE_SOURCES[version] && !MANUAL_BIBLE_VERSIONS[version])
+    .map(([version, verseCount]) => ({
+      version,
+      label: version,
+      downloadable: false,
+      importable: true,
+      sourceType: 'imported',
+      verseCount,
+      isOfflineReady: verseCount > 30000
+    }))
+
+  return [...publicEntries, ...manualEntries, ...importedOnly]
+}
+
+function normalizeBibleJsonBooks(payload) {
+  if (!Array.isArray(payload)) {
+    throw new Error('Formato de JSON bíblico inválido.')
+  }
+
+  return payload.map((bookEntry, bookIndex) => {
+    const chapters = Array.isArray(bookEntry?.chapters) ? bookEntry.chapters : []
+    return {
+      book: BIBLE_BOOKS[bookIndex] || String(bookEntry?.name || bookEntry?.abbrev || `Livro ${bookIndex + 1}`),
+      chapters
+    }
+  })
+}
+
+function importBibleJsonPayload(database, version, payload, progressCallback = null) {
+  if (!database) {
+    throw new Error('SQLite indisponível neste ambiente; não foi possível importar a Bíblia offline.')
+  }
+
+  const normalizedVersion = normalizeBibleVersion(version)
+  const books = normalizeBibleJsonBooks(payload)
+  const insertVerse = database.prepare(`
+    INSERT OR REPLACE INTO bible_verses (version, book, chapter, verse, text)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+  const deleteVersion = database.prepare('DELETE FROM bible_verses WHERE version = ?')
+
+  let verseCount = 0
+  const importTransaction = database.transaction(() => {
+    deleteVersion.run(normalizedVersion)
+
+    books.forEach((bookEntry, bookIndex) => {
+      bookEntry.chapters.forEach((chapterVerses, chapterIndex) => {
+        if (!Array.isArray(chapterVerses)) return
+
+        chapterVerses.forEach((verseText, verseIndex) => {
+          const normalizedText = String(verseText || '').trim()
+          if (!normalizedText) return
+
+          insertVerse.run(
+            normalizedVersion,
+            bookEntry.book,
+            chapterIndex + 1,
+            verseIndex + 1,
+            normalizedText
+          )
+          verseCount += 1
+        })
+      })
+
+      if (progressCallback) {
+        progressCallback({
+          stage: 'importando',
+          version: normalizedVersion,
+          processedBooks: bookIndex + 1,
+          totalBooks: books.length,
+          verseCount
+        })
+      }
+    })
+  })
+
+  importTransaction()
+
+  return {
+    version: normalizedVersion,
+    importedBooks: books.length,
+    verseCount
+  }
 }
 
 // Mapa simplificado de nomes PT para abreviações da bible-api.com

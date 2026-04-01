@@ -10,6 +10,20 @@ const activeElements = {}; // { layerId: wrapperElement }
 const cameraStreams = {}; // { layerId: MediaStream }
 const ndiCanvases = {}; // { layerId: canvas }
 
+function getCssBlendMode(blendMode) {
+  const map = {
+    add: 'screen',
+    normal: 'normal',
+    screen: 'screen',
+    lighten: 'lighten',
+    multiply: 'multiply',
+    overlay: 'overlay',
+    difference: 'difference'
+  }
+
+  return map[blendMode] || 'normal'
+}
+
 function applyLayerPosition(wrapper, layer) {
   const x = Number(layer?.x || 0)
   const y = Number(layer?.y || 0)
@@ -28,6 +42,7 @@ function getLayerSignature(layer) {
     layer.url || '',
     layer.text || '',
     layer.cacheKey || '',
+    layer.blendMode || 'normal',
     layer.muted ? 'muted' : 'live'
   ].join('|')
 }
@@ -67,6 +82,7 @@ async function openCameraInOutput(layerId, deviceId, opacity, visible) {
     }
     wrapper.innerHTML = '';
     wrapper.style.opacity = visible ? opacity : 0;
+    wrapper.style.mixBlendMode = 'normal';
     applyLayerPosition(wrapper, { x: 0, y: 0 });
     const video = document.createElement('video');
     video.srcObject = stream;
@@ -224,6 +240,7 @@ function renderLayers(layers) {
       if (wrapper) {
         wrapper.style.opacity = layer.visible ? layer.opacity : 0;
         wrapper.style.zIndex = index + 1;
+        wrapper.style.mixBlendMode = getCssBlendMode(layer.blendMode);
         applyLayerPosition(wrapper, layer);
       }
       return;
@@ -234,6 +251,7 @@ function renderLayers(layers) {
       if (wrapper) {
         wrapper.style.opacity = layer.visible ? layer.opacity : 0;
         wrapper.style.zIndex = index + 1;
+        wrapper.style.mixBlendMode = getCssBlendMode(layer.blendMode);
         applyLayerPosition(wrapper, layer);
       }
       return;
@@ -254,6 +272,7 @@ function renderMediaLayer(layer, zIndex) {
     }
     wrapper.style.opacity = layer.visible ? layer.opacity : 0;
     wrapper.style.zIndex = zIndex + 1;
+    wrapper.style.mixBlendMode = getCssBlendMode(layer.blendMode);
     applyLayerPosition(wrapper, layer);
     const video = wrapper.querySelector('video');
     if (video) {
@@ -276,6 +295,7 @@ function renderMediaLayer(layer, zIndex) {
   wrapper.dataset.signature = getLayerSignature(layer)
   wrapper.style.zIndex = zIndex + 1;
   wrapper.style.opacity = layer.visible ? layer.opacity : 0;
+  wrapper.style.mixBlendMode = getCssBlendMode(layer.blendMode);
   applyLayerPosition(wrapper, layer);
 
   if (layer.type === 'video' && layer.src) {

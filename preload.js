@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('mediaLayers', {
   bibliaSearch:       (params)  => ipcRenderer.invoke('biblia-search', params),
   bibliaListVersions: ()        => ipcRenderer.invoke('biblia-list-versions'),
   bibliaDownload:     (version) => ipcRenderer.invoke('biblia-download', version),
+  bibliaImportJson:   (version) => ipcRenderer.invoke('biblia-import-json', version),
   onBibliaProgress:   (cb)      => ipcRenderer.on('biblia-download-progress', (e, d) => cb(d)),
 
 })

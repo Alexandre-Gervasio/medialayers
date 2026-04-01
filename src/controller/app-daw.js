@@ -26,6 +26,22 @@ const SESSION_STORAGE_VERSION = 1
 const DEFAULT_MIXER_LAYER_COUNT = 3
 const DEFAULT_CLIP_COLUMN_COUNT = 8
 const SESSION_CACHE_DELAY = 180
+const BLEND_MODE_OPTIONS = [
+  { value: 'add', label: 'Soma' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'screen', label: 'Tela' },
+  { value: 'lighten', label: 'Clarear' },
+  { value: 'multiply', label: 'Multiplicar' },
+  { value: 'overlay', label: 'Sobrepor' },
+  { value: 'difference', label: 'Diferenca' }
+]
+const TRANSITION_MODE_OPTIONS = [
+  { value: 'cut', label: 'Corte' },
+  { value: 'alpha', label: 'Alfa' },
+  { value: 'add', label: 'Soma' },
+  { value: 'screen', label: 'Tela' },
+  { value: 'difference', label: 'Diferenca' }
+]
 
 const state = {
   goldenLayout: null,
@@ -33,17 +49,27 @@ const state = {
   nextLayerId: 1,
   mediaLibrary: [],
   nextMediaId: 1,
+  mediaBins: [],
+  nextMediaBinId: 1,
+  activeMediaBinId: null,
+  mediaSearchQuery: '',
+  mediaSearchKind: 'all',
+  programViewMode: 'fit',
   mixerLayerIds: [],
   clipColumns: [],
   activeMixerRow: 0,
   activeColumnIndex: 0,
   liveColumnIndex: null,
+  liveRows: [],
+  rowTransitions: {},
+  autopilotState: {},
   selectedLayerId: null,
   previewLayerId: null,
   programLayerIds: [],
   ndiAvailable: false,
   ndiSources: [],
   ndiActiveReceivers: {},
+  mediaThumbJobs: {},
   renderLoopId: null,
   ndiOutputActive: false,
   ndiOutputInterval: null,
@@ -76,7 +102,9 @@ const state = {
   },
   bible: {
     version: 'NVI',
-    results: []
+    results: [],
+    catalog: [],
+    downloadState: null
   },
   mediaOverlay: {
     targetRow: 0,
@@ -120,13 +148,19 @@ function createLayer(type, name, extra = {}) {
 }
 
 function createMixerLayer(rowIndex) {
-  return createLayer('empty', `Layer ${rowIndex + 1}`, {
+  return createLayer('empty', `Camada ${rowIndex + 1}`, {
     type: 'layer-master',
     visible: true,
     opacity: 1,
     volume: 1,
+    blendMode: 'add',
     muted: false,
     solo: false,
+    ignoreColumnTrigger: false,
+    transitionDuration: 0,
+    transitionMode: 'alpha',
+    autopilot: false,
+    autopilotInterval: 8,
     meta: { fixedRow: true, rowIndex }
   })
 }
@@ -166,6 +200,233 @@ function createDefaultClipColumns(columnCount = DEFAULT_CLIP_COLUMN_COUNT, rowCo
   }))
 }
 
+function createMediaBin(name) {
+  const id = state.nextMediaBinId++
+  return { id, name: name || `Bin ${id}` }
+}
+
+function ensureMediaBins() {
+  if (!Array.isArray(state.mediaBins) || !state.mediaBins.length) {
+    state.mediaBins = [createMediaBin('Acervo')]
+  }
+
+  if (!state.activeMediaBinId || !state.mediaBins.some((bin) => bin.id === state.activeMediaBinId)) {
+    state.activeMediaBinId = state.mediaBins[0]?.id || null
+  }
+}
+
+function getActiveMediaBin() {
+  return state.mediaBins.find((bin) => bin.id === state.activeMediaBinId) || state.mediaBins[0] || null
+}
+
+function getMediaItemsForActiveBin() {
+  const activeBin = getActiveMediaBin()
+  if (!activeBin) return state.mediaLibrary
+  return state.mediaLibrary.filter((item) => Number(item.binId || activeBin.id) === activeBin.id)
+}
+
+function getMediaKindLabel(kind) {
+  const labels = {
+    image: 'Imagem',
+    video: 'Video',
+    audio: 'Audio',
+    text: 'Texto',
+    browser: 'Fonte web',
+    ndi: 'NDI'
+  }
+
+  return labels[String(kind || '').toLowerCase()] || 'Midia'
+}
+
+function getMediaKindShortLabel(kind) {
+  const labels = {
+    image: 'IMG',
+    video: 'VDO',
+    audio: 'SOM',
+    text: 'TXT',
+    browser: 'WEB',
+    ndi: 'NDI'
+  }
+
+  return labels[String(kind || '').toLowerCase()] || 'MID'
+}
+
+function getFilteredMediaItemsForActiveBin() {
+  const query = String(state.mediaSearchQuery || '').trim().toLowerCase()
+  const kind = String(state.mediaSearchKind || 'all').toLowerCase()
+
+  return getMediaItemsForActiveBin().filter((item) => {
+    if (kind !== 'all' && String(item.kind || '').toLowerCase() !== kind) return false
+    if (!query) return true
+
+    const haystack = [
+      item.name,
+      item.kind,
+      item.sourcePath,
+      item.url,
+      item.text,
+      item.sourceName
+    ].filter(Boolean).join(' ').toLowerCase()
+
+    return haystack.includes(query)
+  })
+}
+
+function getMediaCountForBin(binId) {
+  return state.mediaLibrary.filter((item) => Number(item.binId || state.mediaBins[0]?.id) === Number(binId)).length
+}
+
+function getMediaThumbLabel(item) {
+  return getMediaKindShortLabel(item?.kind)
+}
+
+function getMediaThumbStyle(item) {
+  const runtimeSrc = resolveMediaItemRuntimeSrc(item)
+  const previewSrc = item?.thumbnailDataUrl || runtimeSrc
+
+  if (item?.kind === 'image' && previewSrc) {
+    return `background-image:url('${previewSrc}');`
+  }
+
+  if (item?.kind === 'video' && previewSrc) {
+    return `background-image:linear-gradient(135deg, rgba(16,24,38,0.2), rgba(16,24,38,0.55)), url('${previewSrc}');`
+  }
+
+  const byKind = {
+    audio: 'linear-gradient(135deg, #213754 0%, #132133 100%)',
+    text: 'linear-gradient(135deg, #4b2f1f 0%, #2b1d14 100%)',
+    browser: 'linear-gradient(135deg, #163849 0%, #0f2430 100%)',
+    ndi: 'linear-gradient(135deg, #1f3e2b 0%, #13251a 100%)'
+  }
+
+  return `background-image:${byKind[item?.kind] || 'linear-gradient(135deg, #1c2b42 0%, #101926 100%)'};`
+}
+
+function renderMediaThumb(item, extraClass = '') {
+  if (!item) {
+    return `<div class="clip-thumb ${extraClass} is-empty-thumb"><span>VAZIO</span></div>`
+  }
+
+  return `
+    <div class="clip-thumb ${extraClass}" style="${getMediaThumbStyle(item)}">
+      <span>${escapeHtml(getMediaThumbLabel(item))}</span>
+    </div>
+  `
+}
+
+function refreshMediaViews() {
+  renderClipLauncher()
+  renderLayerList()
+  renderGlobalMediaOverlayLibrary()
+}
+
+function drawVideoThumbnail(video, canvas) {
+  const context = canvas.getContext('2d')
+  if (!context) return null
+
+  const sourceWidth = Math.max(video.videoWidth || 1, 1)
+  const sourceHeight = Math.max(video.videoHeight || 1, 1)
+  const aspectRatio = sourceWidth / sourceHeight
+  canvas.width = 320
+  canvas.height = Math.max(180, Math.round(canvas.width / Math.max(aspectRatio, 0.1)))
+  context.drawImage(video, 0, 0, canvas.width, canvas.height)
+  return canvas.toDataURL('image/jpeg', 0.78)
+}
+
+function generateVideoThumbnail(item) {
+  return new Promise((resolve) => {
+    const runtimeSrc = resolveMediaItemRuntimeSrc(item)
+    if (!runtimeSrc) {
+      resolve(null)
+      return
+    }
+
+    const video = document.createElement('video')
+    const canvas = document.createElement('canvas')
+    let finished = false
+    let seekRequested = false
+    const timeoutId = setTimeout(() => finalize(null), 12000)
+
+    function cleanup() {
+      clearTimeout(timeoutId)
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+
+    function finalize(result) {
+      if (finished) return
+      finished = true
+      cleanup()
+      resolve(result)
+    }
+
+    function captureFrame() {
+      try {
+        finalize(drawVideoThumbnail(video, canvas))
+      } catch {
+        finalize(null)
+      }
+    }
+
+    video.preload = 'metadata'
+    video.muted = true
+    video.playsInline = true
+    video.crossOrigin = 'anonymous'
+
+    video.addEventListener('error', () => finalize(null), { once: true })
+    video.addEventListener('loadeddata', () => {
+      const duration = Number(video.duration || 0)
+      if (!Number.isFinite(duration) || duration <= 0.2) {
+        captureFrame()
+        return
+      }
+
+      seekRequested = true
+      try {
+        video.currentTime = Math.min(Math.max(duration * 0.12, 0.05), Math.max(duration - 0.1, 0.05))
+      } catch {
+        captureFrame()
+      }
+    }, { once: true })
+
+    video.addEventListener('seeked', () => {
+      if (!seekRequested) return
+      captureFrame()
+    }, { once: true })
+
+    video.src = runtimeSrc
+    video.load()
+  })
+}
+
+function scheduleMediaThumbGeneration(items = []) {
+  items
+    .filter((item) => item?.kind === 'video' && !item.thumbnailDataUrl)
+    .forEach((item) => {
+      if (state.mediaThumbJobs[item.id]) return
+
+      state.mediaThumbJobs[item.id] = true
+      generateVideoThumbnail(item)
+        .then((thumbnailDataUrl) => {
+          if (!thumbnailDataUrl) return
+          item.thumbnailDataUrl = thumbnailDataUrl
+          refreshMediaViews()
+          scheduleSessionCache()
+        })
+        .finally(() => {
+          delete state.mediaThumbJobs[item.id]
+        })
+    })
+}
+
+function applyProgramViewMode() {
+  const stage = document.getElementById('program-stage')
+  if (!stage) return
+  stage.classList.toggle('is-fit-mode', state.programViewMode === 'fit')
+  stage.classList.toggle('is-fixed-mode', state.programViewMode === 'fixed-1920')
+}
+
 function normalizeClipColumns(clipColumns, rowCount = DEFAULT_MIXER_LAYER_COUNT) {
   const baseColumns = Array.isArray(clipColumns) && clipColumns.length
     ? clipColumns
@@ -200,6 +461,15 @@ function ensureMixerLayers(rowCount = DEFAULT_MIXER_LAYER_COUNT) {
 
 function ensureClipColumns() {
   state.clipColumns = normalizeClipColumns(state.clipColumns, state.mixerLayerIds.length || DEFAULT_MIXER_LAYER_COUNT)
+}
+
+function ensureLiveRows(rowCount = DEFAULT_MIXER_LAYER_COUNT) {
+  state.liveRows = Array.from({ length: rowCount }, (_, rowIndex) => {
+    const existing = state.liveRows?.[rowIndex]
+    return {
+      columnIndex: typeof existing?.columnIndex === 'number' ? existing.columnIndex : null
+    }
+  })
 }
 
 function getMixerLayerByRow(rowIndex) {
@@ -246,13 +516,20 @@ function serializeSessionState() {
     version: SESSION_STORAGE_VERSION,
     nextLayerId: state.nextLayerId,
     nextMediaId: state.nextMediaId,
+    nextMediaBinId: state.nextMediaBinId,
     layers: state.layers.map(sanitizeLayerForSession),
     mediaLibrary: state.mediaLibrary.map(sanitizeMediaItemForSession),
+    mediaBins: state.mediaBins.map((bin) => ({ ...bin })),
+    activeMediaBinId: state.activeMediaBinId,
+    mediaSearchQuery: state.mediaSearchQuery,
+    mediaSearchKind: state.mediaSearchKind,
+    programViewMode: state.programViewMode,
     mixerLayerIds: [...state.mixerLayerIds],
     clipColumns: normalizeClipColumns(state.clipColumns, state.mixerLayerIds.length || DEFAULT_MIXER_LAYER_COUNT),
     activeMixerRow: state.activeMixerRow,
     activeColumnIndex: state.activeColumnIndex,
     liveColumnIndex: state.liveColumnIndex,
+    liveRows: state.liveRows.map((entry) => ({ columnIndex: typeof entry?.columnIndex === 'number' ? entry.columnIndex : null })),
     selectedLayerId: state.selectedLayerId,
     previewLayerId: state.previewLayerId,
     programLayerIds: [...state.programLayerIds],
@@ -297,10 +574,19 @@ function applySessionSnapshot(snapshot) {
   state.nextLayerId = Number(snapshot?.nextLayerId || 1)
   state.mediaLibrary = Array.isArray(snapshot?.mediaLibrary) ? snapshot.mediaLibrary.map(hydrateMediaItemFromSession) : []
   state.nextMediaId = Number(snapshot?.nextMediaId || 1)
+  state.mediaBins = Array.isArray(snapshot?.mediaBins) ? snapshot.mediaBins.map((bin) => ({ id: Number(bin.id), name: bin.name || `Banco ${bin.id}` })) : []
+  state.nextMediaBinId = Number(snapshot?.nextMediaBinId || 1)
+  state.activeMediaBinId = snapshot?.activeMediaBinId ? Number(snapshot.activeMediaBinId) : null
+  state.mediaSearchQuery = String(snapshot?.mediaSearchQuery || '')
+  state.mediaSearchKind = String(snapshot?.mediaSearchKind || 'all')
+  state.programViewMode = snapshot?.programViewMode === 'fixed-1920' ? 'fixed-1920' : 'fit'
   state.clipColumns = normalizeClipColumns(snapshot?.clipColumns, DEFAULT_MIXER_LAYER_COUNT)
   state.activeMixerRow = clamp(Number(snapshot?.activeMixerRow || 0), 0, DEFAULT_MIXER_LAYER_COUNT - 1)
   state.activeColumnIndex = Math.max(0, Number(snapshot?.activeColumnIndex || 0))
   state.liveColumnIndex = typeof snapshot?.liveColumnIndex === 'number' ? snapshot.liveColumnIndex : null
+  state.liveRows = Array.isArray(snapshot?.liveRows) ? snapshot.liveRows : []
+  state.rowTransitions = {}
+  state.autopilotState = {}
   state.selectedLayerId = snapshot?.selectedLayerId || null
   state.previewLayerId = snapshot?.previewLayerId || null
   state.programLayerIds = Array.isArray(snapshot?.programLayerIds) ? snapshot.programLayerIds.map(Number) : []
@@ -309,6 +595,12 @@ function applySessionSnapshot(snapshot) {
 
   ensureMixerLayers(DEFAULT_MIXER_LAYER_COUNT)
   ensureClipColumns()
+  ensureLiveRows(DEFAULT_MIXER_LAYER_COUNT)
+  ensureMediaBins()
+
+  if (!Array.isArray(snapshot?.liveRows) && typeof state.liveColumnIndex === 'number') {
+    state.liveRows = state.liveRows.map(() => ({ columnIndex: state.liveColumnIndex }))
+  }
 
   if (!state.selectedLayerId || !getLayerById(state.selectedLayerId)) {
     state.selectedLayerId = state.mixerLayerIds[0] || null
@@ -324,10 +616,19 @@ function initState(snapshot = null) {
   state.nextLayerId = 1
   state.mediaLibrary = []
   state.nextMediaId = 1
+  state.mediaBins = []
+  state.nextMediaBinId = 1
+  state.activeMediaBinId = null
+  state.mediaSearchQuery = ''
+  state.mediaSearchKind = 'all'
+  state.programViewMode = 'fit'
   state.mixerLayerIds = []
   state.clipColumns = []
   state.programLayerIds = []
   state.liveColumnIndex = null
+  state.liveRows = []
+  state.rowTransitions = {}
+  state.autopilotState = {}
 
   if (snapshot) {
     applySessionSnapshot(snapshot)
@@ -336,6 +637,8 @@ function initState(snapshot = null) {
 
   ensureMixerLayers(DEFAULT_MIXER_LAYER_COUNT)
   ensureClipColumns()
+  ensureLiveRows(DEFAULT_MIXER_LAYER_COUNT)
+  ensureMediaBins()
   state.selectedLayerId = state.mixerLayerIds[0] || null
   state.previewLayerId = state.selectedLayerId
 }
@@ -345,7 +648,7 @@ function getLayerById(layerId) {
 }
 
 function getProgramLayers() {
-  return getColumnComposite(state.liveColumnIndex)
+  return ProgramScreen()
 }
 
 function clamp(value, min, max) {
@@ -440,11 +743,65 @@ function getPreviewTransformLayer() {
 
 function updateToolbarLabel() {
   const rowLabel = typeof state.activeMixerRow === 'number' ? state.activeMixerRow + 1 : '-'
-  $('#selected-layer-label').text(`Layer ativa: ${rowLabel} • seleção ${state.selectedLayerId || '-'}`)
+  const columnLabel = typeof state.activeColumnIndex === 'number' ? state.activeColumnIndex + 1 : '-'
+  const liveLabel = typeof state.liveColumnIndex === 'number' ? state.liveColumnIndex + 1 : '-'
+  $('#selected-layer-label').text(`Camada ativa ${rowLabel} • Coluna ${columnLabel} • Programa ${liveLabel}`)
 }
 
 function formatOpacity(value) {
   return `${Math.round(Number(value || 0) * 100)}%`
+}
+
+function getColumnClipCount(columnIndex) {
+  return state.clipColumns[columnIndex]?.clips?.filter(Boolean).length || 0
+}
+
+function getBlendModeOptions(selectedValue) {
+  return BLEND_MODE_OPTIONS.map((option) => `
+    <option value="${option.value}" ${option.value === (selectedValue || 'add') ? 'selected' : ''}>${option.label}</option>
+  `).join('')
+}
+
+function getTransitionModeOptions(selectedValue) {
+  return TRANSITION_MODE_OPTIONS.map((option) => `
+    <option value="${option.value}" ${option.value === (selectedValue || 'alpha') ? 'selected' : ''}>${option.label}</option>
+  `).join('')
+}
+
+function getCanvasBlendMode(blendMode) {
+  const map = {
+    add: 'lighter',
+    normal: 'source-over',
+    screen: 'screen',
+    lighten: 'lighten',
+    multiply: 'multiply',
+    overlay: 'overlay',
+    difference: 'difference'
+  }
+
+  return map[blendMode] || 'source-over'
+}
+
+function getCssBlendMode(blendMode) {
+  const map = {
+    add: 'screen',
+    normal: 'normal',
+    screen: 'screen',
+    lighten: 'lighten',
+    multiply: 'multiply',
+    overlay: 'overlay',
+    difference: 'difference'
+  }
+
+  return map[blendMode] || 'normal'
+}
+
+function getLayerStateLabel(layer) {
+  if (!layer?.visible) return 'DESVIO'
+  if (layer.solo) return 'SOLO'
+  if (layer.muted) return 'MUDO'
+  if (layer.autopilot) return 'AUTO'
+  return 'NO AR'
 }
 
 function renderToast(message) {
@@ -503,7 +860,7 @@ function getSoloRowIndexes() {
     .map((layer) => Number(layer.meta?.rowIndex || 0))
 }
 
-function createClipPayload(rowIndex, columnIndex) {
+function createClipPayload(rowIndex, columnIndex, options = {}) {
   const master = getMixerLayerByRow(rowIndex)
   const clip = getClipAt(rowIndex, columnIndex)
   const mediaItem = clip ? getMediaItemById(clip.mediaId) : null
@@ -514,15 +871,16 @@ function createClipPayload(rowIndex, columnIndex) {
   if (soloRows.length && !soloRows.includes(rowIndex)) return null
 
   const payload = {
-    id: master.id,
+    id: options.outputId ?? (mediaItem.kind === 'ndi' ? master.id : master.id * 10),
     cacheKey: mediaItem.id,
     rowIndex,
     columnIndex,
     type: mediaItem.kind,
     name: mediaItem.name,
     visible: true,
-    opacity: Number(master.opacity ?? 1),
+    opacity: Number(options.opacity ?? Number(master.opacity ?? 1)),
     volume: master.muted ? 0 : Number(master.volume ?? 1),
+    blendMode: options.blendMode || master.blendMode || 'add',
     muted: Boolean(master.muted),
     solo: Boolean(master.solo),
     text: mediaItem.text || '',
@@ -557,15 +915,140 @@ function PreviewScreen() {
   return getColumnComposite(state.activeColumnIndex)
 }
 
+function getLiveRowEntry(rowIndex) {
+  return state.liveRows[rowIndex] || { columnIndex: null }
+}
+
+function clearRowTransition(rowIndex) {
+  delete state.rowTransitions[rowIndex]
+}
+
+function clearAutopilotState(rowIndex) {
+  delete state.autopilotState[rowIndex]
+}
+
+function getRowTransitionSnapshot(rowIndex) {
+  const transition = state.rowTransitions[rowIndex]
+  if (!transition) return null
+
+  const elapsed = Date.now() - transition.startedAt
+  const progress = clamp(elapsed / Math.max(transition.durationMs, 1), 0, 1)
+  const remainingMs = Math.max(0, transition.durationMs - elapsed)
+
+  return {
+    active: progress < 1,
+    progress,
+    remainingMs,
+    mode: transition.mode || 'alpha'
+  }
+}
+
+function getRowAutopilotSnapshot(rowIndex) {
+  const master = getMixerLayerByRow(rowIndex)
+  const autopilotEntry = state.autopilotState[rowIndex]
+  if (!master?.autopilot || !autopilotEntry) return null
+
+  const intervalMs = Math.max(1, Number(master.autopilotInterval || 8)) * 1000
+  const remainingMs = Math.max(0, autopilotEntry.nextAt - Date.now())
+  const progress = clamp(1 - (remainingMs / intervalMs), 0, 1)
+
+  return {
+    active: true,
+    progress,
+    remainingMs
+  }
+}
+
+function updateDeckRuntimeIndicators() {
+  $('.runtime-indicator').each((_, element) => {
+    const rowIndex = Number($(element).attr('data-runtime-row'))
+    const transition = getRowTransitionSnapshot(rowIndex)
+    const autopilot = getRowAutopilotSnapshot(rowIndex)
+    const fill = $(element).find('.runtime-indicator-fill')
+    const label = $(element).find('.runtime-indicator-label')
+
+    if (transition?.active) {
+      fill.css('width', `${Math.round(transition.progress * 100)}%`)
+      label.text(`TRANSICAO ${transition.mode.toUpperCase()} • ${(transition.remainingMs / 1000).toFixed(1)}s`)
+      $(element).attr('data-runtime-state', 'transition')
+      return
+    }
+
+    if (autopilot?.active) {
+      fill.css('width', `${Math.round(autopilot.progress * 100)}%`)
+      label.text(`AUTO • ${(autopilot.remainingMs / 1000).toFixed(1)}s`)
+      $(element).attr('data-runtime-state', 'autopilot')
+      return
+    }
+
+    fill.css('width', '0%')
+    label.text('PARADO')
+    $(element).attr('data-runtime-state', 'idle')
+  })
+}
+
+function hasActiveTransitions() {
+  return Object.keys(state.rowTransitions).length > 0
+}
+
+function getProgramSummary() {
+  const liveIndexes = state.liveRows
+    .map((entry) => entry?.columnIndex)
+    .filter((value) => typeof value === 'number')
+
+  if (!liveIndexes.length) return 'vazio'
+
+  const uniqueIndexes = [...new Set(liveIndexes)]
+  if (uniqueIndexes.length === 1) {
+    return getClipGridSummary(uniqueIndexes[0])
+  }
+
+  return `Mistura • ${liveIndexes.length} camada(s) ativas`
+}
+
+function getProgramEntriesForRow(rowIndex) {
+  const transition = state.rowTransitions[rowIndex]
+  if (transition) {
+    const master = getMixerLayerByRow(rowIndex)
+    const elapsed = Date.now() - transition.startedAt
+    const progress = clamp(elapsed / Math.max(transition.durationMs, 1), 0, 1)
+
+    if (progress >= 1) {
+      clearRowTransition(rowIndex)
+    } else {
+      const transitionMode = transition.mode || master?.transitionMode || 'alpha'
+      const incomingBlendMode = transitionMode === 'alpha' || transitionMode === 'cut'
+        ? master?.blendMode || 'add'
+        : transitionMode
+      const fromPayload = createClipPayload(rowIndex, transition.fromColumnIndex, {
+        outputId: getMixerLayerByRow(rowIndex).id * 10 + 1,
+        opacity: Number(getMixerLayerByRow(rowIndex)?.opacity ?? 1) * (transitionMode === 'alpha' ? (1 - progress) : 1)
+      })
+      const toPayload = createClipPayload(rowIndex, transition.toColumnIndex, {
+        outputId: getMixerLayerByRow(rowIndex).id * 10 + 2,
+        opacity: Number(getMixerLayerByRow(rowIndex)?.opacity ?? 1) * progress,
+        blendMode: incomingBlendMode
+      })
+
+      return [fromPayload, toPayload].filter(Boolean)
+    }
+  }
+
+  const liveColumn = getLiveRowEntry(rowIndex).columnIndex
+  if (typeof liveColumn !== 'number') return []
+  const payload = createClipPayload(rowIndex, liveColumn, { outputId: getMixerLayerByRow(rowIndex).id * 10 })
+  return payload ? [payload] : []
+}
+
 function ProgramScreen() {
-  return getColumnComposite(state.liveColumnIndex)
+  return state.mixerLayerIds.flatMap((layerId, rowIndex) => getProgramEntriesForRow(rowIndex))
 }
 
 function getClipGridSummary(columnIndex) {
   const column = state.clipColumns[columnIndex]
   if (!column) return 'Sem coluna selecionada'
   const clipCount = column.clips.filter(Boolean).length
-  return `${column.name} • ${clipCount} clip(s)`
+  return `${column.name} • ${clipCount} clipe(s)`
 }
 
 function notifyOutputLayers() {
@@ -581,15 +1064,163 @@ function getClipAt(rowIndex, columnIndex) {
 }
 
 function getClipLabel(clip) {
-  if (!clip) return 'Adicionar mídia'
+  if (!clip) return 'Adicionar midia'
   const mediaItem = getMediaItemById(clip.mediaId)
-  return mediaItem?.name || clip.label || 'Mídia indisponível'
+  return mediaItem?.name || clip.label || 'Midia indisponivel'
 }
 
 function getClipTypeLabel(clip) {
   if (!clip) return 'Clique para atribuir'
   const mediaItem = getMediaItemById(clip.mediaId)
-  return mediaItem?.kind ? mediaItem.kind.toUpperCase() : 'SEM FONTE'
+  return mediaItem?.kind ? getMediaKindLabel(mediaItem.kind).toUpperCase() : 'SEM FONTE'
+}
+
+function getClipStateLabel(rowIndex, columnIndex, clip) {
+  const liveColumn = getLiveRowEntry(rowIndex).columnIndex
+  if (liveColumn === columnIndex && clip) return 'NO AR'
+  if (state.activeMixerRow === rowIndex && state.activeColumnIndex === columnIndex) return 'ARMADO'
+  if (clip) return 'PRONTO'
+  return 'VAZIO'
+}
+
+function getAvailableClipColumnsForRow(rowIndex) {
+  return state.clipColumns
+    .map((column, columnIndex) => ({ columnIndex, clip: getClipAt(rowIndex, columnIndex) }))
+    .filter((entry) => Boolean(entry.clip))
+}
+
+async function syncNdiReceiverForRow(rowIndex, columnIndex) {
+  const master = getMixerLayerByRow(rowIndex)
+  const clip = typeof columnIndex === 'number' ? getClipAt(rowIndex, columnIndex) : null
+  const mediaItem = clip ? getMediaItemById(clip.mediaId) : null
+
+  if (!master) return
+
+  if (mediaItem?.kind === 'ndi' && window.mediaLayers?.ndiStartReceiver) {
+    try {
+      const sources = await window.mediaLayers.ndiFindSources()
+      const sourceIndex = sources.findIndex((source, index) => {
+        if (mediaItem.sourceName) return source.name === mediaItem.sourceName
+        return index === Number(mediaItem.sourceIndex || 0)
+      })
+
+      if (sourceIndex >= 0) {
+        await window.mediaLayers.ndiStartReceiver({ layerId: master.id, sourceIndex })
+        state.ndiActiveReceivers[master.id] = sourceIndex
+        return
+      }
+    } catch (error) {
+      console.warn('[DAW] Falha ao iniciar receiver NDI da row', error)
+    }
+  }
+
+  await stopLayerReceiverIfNeeded(master)
+}
+
+async function activateRowClip(rowIndex, columnIndex, options = {}) {
+  const master = getMixerLayerByRow(rowIndex)
+  const clip = typeof columnIndex === 'number' ? getClipAt(rowIndex, columnIndex) : null
+  const mediaItem = clip ? getMediaItemById(clip.mediaId) : null
+  const currentLiveColumn = getLiveRowEntry(rowIndex).columnIndex
+
+  if (!master) return false
+  if (!clip || !mediaItem) return false
+
+  const canTransition = Number(master.transitionDuration || 0) > 0
+    && (master.transitionMode || 'alpha') !== 'cut'
+    && typeof currentLiveColumn === 'number'
+    && currentLiveColumn !== columnIndex
+    && getClipAt(rowIndex, currentLiveColumn)
+    && getMediaItemById(getClipAt(rowIndex, currentLiveColumn).mediaId)?.kind !== 'ndi'
+    && mediaItem.kind !== 'ndi'
+
+  state.liveRows[rowIndex] = { columnIndex }
+
+  if (canTransition) {
+    state.rowTransitions[rowIndex] = {
+      fromColumnIndex: currentLiveColumn,
+      toColumnIndex: columnIndex,
+      startedAt: Date.now(),
+      durationMs: Number(master.transitionDuration || 0) * 1000,
+      mode: master.transitionMode || 'alpha'
+    }
+  } else {
+    clearRowTransition(rowIndex)
+  }
+
+  await syncNdiReceiverForRow(rowIndex, columnIndex)
+
+  if (options.updateSelection !== false) {
+    setActiveClipCell(rowIndex, columnIndex)
+  }
+
+  return true
+}
+
+async function stepRowClip(rowIndex, direction, options = {}) {
+  const available = getAvailableClipColumnsForRow(rowIndex)
+  if (!available.length) return
+
+  const currentColumn = getLiveRowEntry(rowIndex).columnIndex
+  const currentIndex = available.findIndex((entry) => entry.columnIndex === currentColumn)
+  let targetIndex = 0
+
+  if (currentIndex >= 0) {
+    targetIndex = (currentIndex + direction + available.length) % available.length
+  } else {
+    const activeIndex = available.findIndex((entry) => entry.columnIndex === state.activeColumnIndex)
+    targetIndex = activeIndex >= 0 ? activeIndex : 0
+  }
+
+  const nextColumnIndex = available[targetIndex].columnIndex
+  await activateRowClip(rowIndex, nextColumnIndex, { updateSelection: options.updateSelection !== false })
+  state.liveColumnIndex = nextColumnIndex
+  renderTimelineOverview()
+  renderClipLauncher()
+  renderLayerList()
+  renderPropertiesPanel()
+  renderSwitcherMonitors()
+  notifyOutputLayers()
+  if (options.persist !== false) {
+    scheduleSessionCache()
+  }
+}
+
+function runAutopilotTick() {
+  const now = Date.now()
+
+  state.mixerLayerIds.forEach((layerId, rowIndex) => {
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master?.autopilot) {
+      clearAutopilotState(rowIndex)
+      return
+    }
+
+    const liveColumn = getLiveRowEntry(rowIndex).columnIndex
+    if (typeof liveColumn !== 'number') {
+      clearAutopilotState(rowIndex)
+      return
+    }
+
+    const available = getAvailableClipColumnsForRow(rowIndex)
+    if (available.length < 2) {
+      clearAutopilotState(rowIndex)
+      return
+    }
+
+    const intervalMs = Math.max(1, Number(master.autopilotInterval || 8)) * 1000
+    const autopilotEntry = state.autopilotState[rowIndex] || { nextAt: now + intervalMs }
+
+    if (now >= autopilotEntry.nextAt) {
+      stepRowClip(rowIndex, 1, { updateSelection: false, persist: false }).catch((error) => {
+        console.warn('[DAW] Falha no autopilot da row', error)
+      })
+      state.autopilotState[rowIndex] = { nextAt: now + intervalMs }
+      return
+    }
+
+    state.autopilotState[rowIndex] = autopilotEntry
+  })
 }
 
 function selectMixerRow(rowIndex) {
@@ -621,6 +1252,7 @@ function setActiveClipCell(rowIndex, columnIndex) {
   renderClipLauncher()
   renderLayerList()
   renderPropertiesPanel()
+  renderSwitcherMonitors()
   scheduleSessionCache()
 }
 
@@ -636,6 +1268,7 @@ function createMediaItemFromFile(file) {
     mimeType: file.type || '',
     sourcePath,
     runtimeSrc: sourcePath ? sourcePathToFileUrl(sourcePath) : URL.createObjectURL(file),
+    thumbnailDataUrl: null,
     createdAt: new Date().toISOString()
   }
 }
@@ -649,8 +1282,95 @@ function upsertMediaLibraryItem(item) {
 
   if (existing) return existing
 
-  state.mediaLibrary.push(item)
+  state.mediaLibrary.push({
+    ...item,
+    binId: Number(item.binId || state.activeMediaBinId || getActiveMediaBin()?.id || 1)
+  })
   return item
+}
+
+function createMediaBinFromPrompt() {
+  const name = prompt('Nome do banco', `Banco ${state.nextMediaBinId}`)
+  if (!name) return null
+  const trimmedName = String(name).trim()
+  if (!trimmedName) return null
+
+  const bin = createMediaBin(trimmedName)
+  state.mediaBins.push(bin)
+  state.activeMediaBinId = bin.id
+  renderLayerList()
+  renderGlobalMediaOverlayLibrary()
+  scheduleSessionCache()
+  return bin
+}
+
+function renderMediaBinTabs(options = {}) {
+  const bins = state.mediaBins.map((bin) => `
+    <button class="media-bin-tab ${state.activeMediaBinId === bin.id ? 'is-active' : ''}" data-media-bin="${bin.id}">
+      <strong>${escapeHtml(bin.name)}</strong>
+      <span>${getMediaCountForBin(bin.id)}</span>
+    </button>
+  `).join('')
+
+  return `
+    <div class="media-bin-strip">
+      ${bins}
+      ${options.showCreate ? '<button class="media-bin-create" data-create-media-bin="true">+ Banco</button>' : ''}
+    </div>
+  `
+}
+
+function renderMediaSearchControls() {
+  return `
+    <div class="media-search-bar">
+      <input
+        type="search"
+        class="media-search-input"
+        data-media-search-query="true"
+        value="${escapeHtml(state.mediaSearchQuery || '')}"
+        placeholder="Buscar por nome, tipo ou origem"
+      />
+      <select class="media-search-select" data-media-search-kind="true">
+        <option value="all" ${state.mediaSearchKind === 'all' ? 'selected' : ''}>Todos</option>
+        <option value="image" ${state.mediaSearchKind === 'image' ? 'selected' : ''}>Imagem</option>
+        <option value="video" ${state.mediaSearchKind === 'video' ? 'selected' : ''}>Video</option>
+        <option value="audio" ${state.mediaSearchKind === 'audio' ? 'selected' : ''}>Audio</option>
+        <option value="text" ${state.mediaSearchKind === 'text' ? 'selected' : ''}>Texto</option>
+        <option value="browser" ${state.mediaSearchKind === 'browser' ? 'selected' : ''}>Fonte web</option>
+        <option value="ndi" ${state.mediaSearchKind === 'ndi' ? 'selected' : ''}>NDI</option>
+      </select>
+    </div>
+  `
+}
+
+function bindMediaBinControls(scopeSelector = 'body') {
+  const scope = $(scopeSelector)
+  scope.find('[data-media-bin]').off('click').on('click', (event) => {
+    state.activeMediaBinId = Number($(event.currentTarget).attr('data-media-bin'))
+    renderLayerList()
+    renderGlobalMediaOverlayLibrary()
+    scheduleSessionCache()
+  })
+
+  scope.find('[data-create-media-bin]').off('click').on('click', () => {
+    createMediaBinFromPrompt()
+  })
+}
+
+function bindMediaSearchControls(scopeSelector = 'body') {
+  const scope = $(scopeSelector)
+
+  scope.find('[data-media-search-query]').off('input').on('input', (event) => {
+    state.mediaSearchQuery = String(event.target.value || '')
+    renderLayerList()
+    renderGlobalMediaOverlayLibrary()
+  })
+
+  scope.find('[data-media-search-kind]').off('change').on('change', (event) => {
+    state.mediaSearchKind = String(event.target.value || 'all')
+    renderLayerList()
+    renderGlobalMediaOverlayLibrary()
+  })
 }
 
 function importFilesToLibrary(files) {
@@ -667,8 +1387,9 @@ function importFilesToLibrary(files) {
   renderTimelineOverview()
   renderClipLauncher()
   renderLayerList()
+  scheduleMediaThumbGeneration(addedItems)
   scheduleSessionCache()
-  renderToast(`${addedItems.length} mídia(s) adicionada(s) à biblioteca`)
+  renderToast(`${addedItems.length} midia(s) adicionada(s) a biblioteca`)
   return addedItems
 }
 
@@ -696,10 +1417,10 @@ function assignMediaToSlot(mediaId, rowIndex, columnIndex) {
   }
 
   setActiveClipCell(rowIndex, columnIndex)
-  renderTimelineOverview()
-  renderClipLauncher()
+  renderSwitcherMonitors()
+  notifyOutputLayers()
   scheduleSessionCache()
-  renderToast(`${mediaItem.name} atribuída à coluna ${columnIndex + 1}, layer ${rowIndex + 1}`)
+  renderToast(`${mediaItem.name} atribuida a coluna ${columnIndex + 1}, camada ${rowIndex + 1}`)
 }
 
 function clearClipSlot(rowIndex, columnIndex) {
@@ -708,8 +1429,8 @@ function clearClipSlot(rowIndex, columnIndex) {
 
   column.clips[rowIndex] = null
   setActiveClipCell(rowIndex, columnIndex)
-  renderTimelineOverview()
-  renderClipLauncher()
+  renderSwitcherMonitors()
+  notifyOutputLayers()
   scheduleSessionCache()
 }
 
@@ -720,28 +1441,12 @@ async function launchColumn(columnIndex) {
   for (let rowIndex = 0; rowIndex < state.mixerLayerIds.length; rowIndex += 1) {
     const master = getMixerLayerByRow(rowIndex)
     const clip = getClipAt(rowIndex, columnIndex)
-    const mediaItem = clip ? getMediaItemById(clip.mediaId) : null
 
     if (!master) continue
 
-    if (mediaItem?.kind === 'ndi' && window.mediaLayers?.ndiStartReceiver) {
-      try {
-        const sources = await window.mediaLayers.ndiFindSources()
-        const sourceIndex = sources.findIndex((source, index) => {
-          if (mediaItem.sourceName) return source.name === mediaItem.sourceName
-          return index === Number(mediaItem.sourceIndex || 0)
-        })
-
-        if (sourceIndex >= 0) {
-          await window.mediaLayers.ndiStartReceiver({ layerId: master.id, sourceIndex })
-          state.ndiActiveReceivers[master.id] = sourceIndex
-        }
-      } catch (error) {
-        console.warn('[DAW] Falha ao iniciar receiver NDI da coluna', error)
-      }
-    } else {
-      await stopLayerReceiverIfNeeded(master)
-    }
+    if (master.ignoreColumnTrigger) continue
+    if (!clip) continue
+    await activateRowClip(rowIndex, columnIndex, { updateSelection: false })
   }
 
   state.liveColumnIndex = columnIndex
@@ -764,7 +1469,7 @@ function renderTimelineOverview() {
   if (!host.length) return
 
   const buttons = state.clipColumns.map((column, index) => {
-    const hasContent = column.clips.some(Boolean)
+    const clipCount = getColumnClipCount(index)
     const classes = [
       'column-trigger-btn',
       state.activeColumnIndex === index ? 'is-selected' : '',
@@ -774,7 +1479,7 @@ function renderTimelineOverview() {
     return `
       <button class="${classes}" data-column-trigger="${index}">
         <strong>${escapeHtml(column.name)}</strong>
-        <span>${hasContent ? 'Disparar coluna' : 'Sem clips'}</span>
+        <span>${clipCount ? `${clipCount} clipe(s)` : 'Sem clipes'}</span>
       </button>
     `
   }).join('')
@@ -782,10 +1487,13 @@ function renderTimelineOverview() {
   host.html(`
     <div class="timeline-summary-bar">
       <div>
-        <strong>Layer ativa:</strong> ${state.activeMixerRow + 1}
+        <strong>Camada ativa:</strong> ${state.activeMixerRow + 1}
       </div>
       <div>
         <strong>Coluna no ar:</strong> ${state.liveColumnIndex === null ? '-' : state.liveColumnIndex + 1}
+      </div>
+      <div>
+        <strong>Previa:</strong> ${getClipGridSummary(state.activeColumnIndex)}
       </div>
       <button id="timeline-open-library" class="btn">Biblioteca global</button>
     </div>
@@ -812,22 +1520,79 @@ function renderClipLauncher() {
 
   function LayerControls(rowIndex) {
     const master = getMixerLayerByRow(rowIndex)
+    const activeClip = getClipAt(rowIndex, state.activeColumnIndex)
+    const liveColumn = getLiveRowEntry(rowIndex).columnIndex
+    const liveClip = typeof liveColumn === 'number' ? getClipAt(rowIndex, liveColumn) : null
+    const cueMedia = activeClip ? getMediaItemById(activeClip.mediaId) : null
+    const liveMedia = liveClip ? getMediaItemById(liveClip.mediaId) : null
     if (!master) return ''
 
     return `
       <div class="layer-control-stack">
         <div class="layer-control-topline">
-          <strong>${escapeHtml(master.name)}</strong>
-          <span>${master.solo ? 'SOLO' : master.muted ? 'MUTE' : 'LIVE'}</span>
+          <div>
+            <strong>${escapeHtml(master.name)}</strong>
+            <span>${getLayerStateLabel(master)}</span>
+          </div>
+          <div class="layer-strip-actions">
+            <button class="strip-button" title="Limpar clipe da celula ativa" data-layer-clear="${rowIndex}">X</button>
+            <button class="strip-button ${!master.visible ? 'is-active' : ''}" title="Bypass" data-layer-bypass="${rowIndex}">B</button>
+            <button class="strip-button ${master.muted ? 'is-active' : ''}" title="Mudo" data-layer-mute="${rowIndex}">M</button>
+            <button class="strip-button ${master.solo ? 'is-active' : ''}" title="Solo" data-layer-solo="${rowIndex}">S</button>
+          </div>
         </div>
-        <label>Opacity ${Math.round((master.opacity ?? 1) * 100)}%</label>
-        <input data-layer-opacity="${rowIndex}" type="range" min="0" max="100" step="1" value="${Math.round((master.opacity ?? 1) * 100)}" />
-        <label>Volume ${Math.round((master.volume ?? 1) * 100)}%</label>
-        <input data-layer-volume="${rowIndex}" type="range" min="0" max="100" step="1" value="${Math.round((master.volume ?? 1) * 100)}" />
-        <div class="layer-control-buttons">
-          <button class="btn small ${master.muted ? 'danger' : ''}" data-layer-mute="${rowIndex}">${master.muted ? 'Muted' : 'Mute'}</button>
-          <button class="btn small ${master.solo ? 'success' : ''}" data-layer-solo="${rowIndex}">${master.solo ? 'Solo ON' : 'Solo'}</button>
+        <div class="layer-clip-pair">
+          <div class="layer-thumb-stack">
+            ${renderMediaThumb(cueMedia, 'is-layer-thumb')}
+            <div class="layer-clip-summary is-cued">Armado: ${escapeHtml(activeClip ? getClipLabel(activeClip) : 'Slot vazio na coluna selecionada')}</div>
+          </div>
+          <div class="layer-thumb-stack">
+            ${renderMediaThumb(liveMedia, 'is-layer-thumb')}
+            <div class="layer-clip-summary is-live">No ar: ${escapeHtml(liveClip ? getClipLabel(liveClip) : 'Nenhum clipe no ar')}</div>
+          </div>
         </div>
+        <div class="layer-nav-row">
+          <button class="btn small" data-layer-prev="${rowIndex}">Anterior</button>
+          <button class="btn small" data-layer-next="${rowIndex}">Proxima</button>
+          <label class="layer-toggle-inline">
+            <input data-layer-ignore-column="${rowIndex}" type="checkbox" ${master.ignoreColumnTrigger ? 'checked' : ''} />
+            Ignorar coluna
+          </label>
+          <label class="layer-toggle-inline">
+            <input data-layer-autopilot="${rowIndex}" type="checkbox" ${master.autopilot ? 'checked' : ''} />
+            Auto
+          </label>
+        </div>
+        <div class="runtime-indicator" data-runtime-row="${rowIndex}" data-runtime-state="idle">
+          <div class="runtime-indicator-track"><div class="runtime-indicator-fill"></div></div>
+          <div class="runtime-indicator-label">PARADO</div>
+        </div>
+        <div class="fader-row">
+          <span class="fader-label">V</span>
+          <input data-layer-opacity="${rowIndex}" type="range" min="0" max="100" step="1" value="${Math.round((master.opacity ?? 1) * 100)}" />
+          <span class="fader-value">${Math.round((master.opacity ?? 1) * 100)}%</span>
+        </div>
+        <div class="fader-row">
+          <span class="fader-label">A</span>
+          <input data-layer-volume="${rowIndex}" type="range" min="0" max="100" step="1" value="${Math.round((master.volume ?? 1) * 100)}" />
+          <span class="fader-value">${Math.round((master.volume ?? 1) * 100)}%</span>
+        </div>
+        <label class="blend-row">Mescla
+          <select class="blend-select" data-layer-blend="${rowIndex}">
+            ${getBlendModeOptions(master.blendMode || 'add')}
+          </select>
+        </label>
+        <label class="blend-row">Modo de transicao
+          <select class="blend-select" data-layer-transition-mode="${rowIndex}">
+            ${getTransitionModeOptions(master.transitionMode || 'alpha')}
+          </select>
+        </label>
+        <label class="blend-row">Transicao ${Number(master.transitionDuration || 0).toFixed(1)}s
+          <input data-layer-transition="${rowIndex}" type="range" min="0" max="3" step="0.1" value="${Number(master.transitionDuration || 0)}" />
+        </label>
+        <label class="blend-row">Autopiloto ${Number(master.autopilotInterval || 8).toFixed(0)}s
+          <input data-layer-autopilot-interval="${rowIndex}" type="range" min="2" max="30" step="1" value="${Number(master.autopilotInterval || 8)}" />
+        </label>
       </div>
     `
   }
@@ -836,13 +1601,21 @@ function renderClipLauncher() {
     return state.mixerLayerIds.map((layerId, rowIndex) => {
       const rowCells = state.clipColumns.map((column, columnIndex) => {
         const clip = getClipAt(rowIndex, columnIndex)
+        const mediaItem = clip ? getMediaItemById(clip.mediaId) : null
         const selected = state.activeMixerRow === rowIndex && state.activeColumnIndex === columnIndex
-        const live = state.liveColumnIndex === columnIndex
-        const active = live && Boolean(clip)
+        const rowLiveColumn = getLiveRowEntry(rowIndex).columnIndex
+        const active = rowLiveColumn === columnIndex && Boolean(clip)
+        const cued = selected
+        const ready = !active && !cued && Boolean(clip)
+        const stateLabel = getClipStateLabel(rowIndex, columnIndex, clip)
 
         return `
-          <div class="clip-slot ${selected ? 'is-selected' : ''} ${active ? 'is-live' : ''}" data-clip-slot="${rowIndex}:${columnIndex}">
-            <strong>${escapeHtml(getClipLabel(clip))}</strong>
+          <div class="clip-slot ${selected ? 'is-selected' : ''} ${active ? 'is-live' : ''} ${cued ? 'is-cued' : ''} ${ready ? 'is-ready' : ''} ${clip ? '' : 'is-empty'}" data-clip-slot="${rowIndex}:${columnIndex}">
+            ${renderMediaThumb(mediaItem)}
+            <div class="clip-slot-topline">
+              <strong>${escapeHtml(getClipLabel(clip))}</strong>
+              <span class="clip-status-tag">${stateLabel}</span>
+            </div>
             <span>${escapeHtml(getClipTypeLabel(clip))}</span>
             <div class="clip-slot-actions">
               <button class="btn small" data-assign-slot="${rowIndex}:${columnIndex}">Biblioteca</button>
@@ -865,7 +1638,8 @@ function renderClipLauncher() {
 
   const headerCells = state.clipColumns.map((column, index) => `
     <button class="clip-column-head ${state.activeColumnIndex === index ? 'is-selected' : ''} ${state.liveColumnIndex === index ? 'is-live' : ''}" data-column-head="${index}">
-      ${escapeHtml(column.name)}
+      <strong>${escapeHtml(column.name)}</strong>
+      <span>${getColumnClipCount(index)} clipe(s)</span>
     </button>
   `).join('')
 
@@ -873,18 +1647,20 @@ function renderClipLauncher() {
     <div class="clip-launcher-shell">
       <div class="clip-launcher-head">
         <div>
-          <strong>Clips por coluna</strong>
-          <span>Selecione a layer, atribua mídias da biblioteca global e dispare a coluna inteira.</span>
+          <strong>Deck de composicao</strong>
+          <span>Linhas sao camadas. Colunas disparam clipes em paralelo, com faixa fixa de camada no estilo Resolume.</span>
         </div>
-        <button id="clips-open-library" class="btn">Inserir mídia</button>
+        <button id="clips-open-library" class="btn">Inserir midia</button>
       </div>
       <div class="clip-grid-head">
-        <div class="clip-grid-corner">Layer Controls</div>
+        <div class="clip-grid-corner">Faixa de camadas</div>
         ${headerCells}
       </div>
       <div class="clip-grid-body">${ClipGrid()}</div>
     </div>
   `)
+
+  updateDeckRuntimeIndicators()
 
   host.find('[data-select-row]').on('click', (event) => {
     selectMixerRow(Number($(event.currentTarget).attr('data-select-row')))
@@ -940,6 +1716,32 @@ function renderClipLauncher() {
     master.volume = Number(event.target.value) / 100
     renderClipLauncher()
     renderPropertiesPanel()
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-clear]').on('click', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-clear'))
+    clearClipSlot(rowIndex, state.activeColumnIndex)
+  })
+
+  host.find('[data-layer-prev]').on('click', async (event) => {
+    await stepRowClip(Number($(event.currentTarget).attr('data-layer-prev')), -1)
+  })
+
+  host.find('[data-layer-next]').on('click', async (event) => {
+    await stepRowClip(Number($(event.currentTarget).attr('data-layer-next')), 1)
+  })
+
+  host.find('[data-layer-bypass]').on('click', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-bypass'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.visible = !master.visible
+    renderClipLauncher()
+    renderPropertiesPanel()
+    renderSwitcherMonitors()
     notifyOutputLayers()
     scheduleSessionCache()
   })
@@ -951,6 +1753,7 @@ function renderClipLauncher() {
     master.muted = !master.muted
     renderClipLauncher()
     renderPropertiesPanel()
+    renderSwitcherMonitors()
     notifyOutputLayers()
     scheduleSessionCache()
   })
@@ -964,6 +1767,70 @@ function renderClipLauncher() {
     renderPropertiesPanel()
     renderSwitcherMonitors()
     notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-blend]').on('change', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-blend'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.blendMode = event.target.value
+    renderClipLauncher()
+    renderPropertiesPanel()
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-ignore-column]').on('change', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-ignore-column'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.ignoreColumnTrigger = event.currentTarget.checked
+    renderClipLauncher()
+    renderPropertiesPanel()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-autopilot]').on('change', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-autopilot'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.autopilot = event.currentTarget.checked
+    clearAutopilotState(rowIndex)
+    renderClipLauncher()
+    renderPropertiesPanel()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-transition-mode]').on('change', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-transition-mode'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.transitionMode = event.target.value
+    renderClipLauncher()
+    renderPropertiesPanel()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-transition]').on('input', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-transition'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.transitionDuration = Number(event.target.value)
+    renderClipLauncher()
+    renderPropertiesPanel()
+    scheduleSessionCache()
+  })
+
+  host.find('[data-layer-autopilot-interval]').on('input', (event) => {
+    const rowIndex = Number($(event.currentTarget).attr('data-layer-autopilot-interval'))
+    const master = getMixerLayerByRow(rowIndex)
+    if (!master) return
+    master.autopilotInterval = Number(event.target.value)
+    clearAutopilotState(rowIndex)
+    renderClipLauncher()
+    renderPropertiesPanel()
     scheduleSessionCache()
   })
 }
@@ -1050,7 +1917,9 @@ function drawWrappedText(ctx, text, bounds, lineHeight = 52) {
 function drawLayer(ctx, layer, canvas) {
   if (!layer.visible) return
 
+  ctx.save()
   ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity))
+  ctx.globalCompositeOperation = getCanvasBlendMode(layer.blendMode)
 
   if (layer.type === 'ndi') {
     drawNdiLayer(ctx, layer, canvas)
@@ -1089,13 +1958,14 @@ function drawLayer(ctx, layer, canvas) {
     ctx.fillRect(-bounds.width / 2, -bounds.height / 2, bounds.width, bounds.height)
     ctx.fillStyle = '#9fd4ff'
     ctx.font = 'bold 18px Segoe UI'
-    ctx.fillText('Browser Source', -bounds.width / 2 + 20, -bounds.height / 2 + 30)
+    ctx.fillText('Fonte web', -bounds.width / 2 + 20, -bounds.height / 2 + 30)
     ctx.fillStyle = '#e7eef9'
     ctx.font = '14px monospace'
     drawWrappedText(ctx, layer.url || '', bounds, 20)
     ctx.restore()
   }
 
+  ctx.restore()
   ctx.globalAlpha = 1
 }
 
@@ -1194,6 +2064,7 @@ function drawCompositeLayer(ctx, layer, canvas) {
 
   ctx.save()
   ctx.globalAlpha = Math.max(0, Math.min(1, Number(layer.opacity ?? 1)))
+  ctx.globalCompositeOperation = getCanvasBlendMode(layer.blendMode)
 
   if (layer.type === 'image' || layer.type === 'video') {
     const element = ensurePreviewMediaElement(layer)
@@ -1218,7 +2089,7 @@ function drawCompositeLayer(ctx, layer, canvas) {
     ctx.fillText(`Audio • ${layer.name}`, -bounds.width / 2 + 20, 0)
     ctx.font = '14px Segoe UI'
     ctx.fillStyle = '#9fb3cc'
-    ctx.fillText(`Volume ${Math.round((layer.volume ?? 1) * 100)}% ${layer.muted ? '• Muted' : ''}`, -bounds.width / 2 + 20, 32)
+    ctx.fillText(`Volume ${Math.round((layer.volume ?? 1) * 100)}% ${layer.muted ? '• Mudo' : ''}`, -bounds.width / 2 + 20, 32)
   } else if (layer.type === 'browser') {
     const bounds = getLayerBounds(layer, canvas)
     ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
@@ -1226,7 +2097,7 @@ function drawCompositeLayer(ctx, layer, canvas) {
     ctx.fillRect(-bounds.width / 2, -bounds.height / 2, bounds.width, bounds.height)
     ctx.fillStyle = '#9fd4ff'
     ctx.font = 'bold 20px Segoe UI'
-    ctx.fillText('Browser Source', -bounds.width / 2 + 20, -bounds.height / 2 + 30)
+    ctx.fillText('Fonte web', -bounds.width / 2 + 20, -bounds.height / 2 + 30)
     ctx.fillStyle = '#e7eef9'
     ctx.font = '14px monospace'
     drawWrappedText(ctx, layer.url || '', bounds, 20)
@@ -1250,9 +2121,10 @@ function renderCanvasForEntries(canvasId, entries) {
 function renderSwitcherMonitors() {
   renderCanvasForEntries('preview-canvas', PreviewScreen())
   renderCanvasForEntries('program-canvas', ProgramScreen())
+  applyProgramViewMode()
 
-  $('#preview-state').text(`Preview • ${getClipGridSummary(state.activeColumnIndex)}`)
-  $('#program-state').text(state.liveColumnIndex === null ? 'Program • vazio' : `Program • ${getClipGridSummary(state.liveColumnIndex)}`)
+  $('#preview-state').text(`Previa • ${getClipGridSummary(state.activeColumnIndex)}`)
+  $('#program-state').text(`Programa • ${getProgramSummary()}`)
 }
 
 function sendCompositeFrameToNdi() {
@@ -1294,7 +2166,7 @@ async function startNdiOutput() {
     state.ndiOutputActive = true
     startNdiOutputLoop()
     window.mediaLayers.sendToOutput({ type: 'ndi-output-start' })
-    $('#program-state').text('Program: NDI output ativo')
+    $('#program-state').text('Programa: saida NDI ativa')
   } catch (error) {
     console.error('[DAW] Falha ao iniciar NDI output', error)
   }
@@ -1388,31 +2260,47 @@ function renderLayerList() {
   const list = $('#layer-list')
   if (!list.length) return
 
+  ensureMediaBins()
+  const visibleItems = getFilteredMediaItemsForActiveBin()
+  scheduleMediaThumbGeneration(visibleItems)
+
   if (!state.mediaLibrary.length) {
-    list.html('<li class="empty-state compact">Biblioteca global vazia. Use o overlay para importar mídias persistentes.</li>')
+    list.html(`
+      <li>${renderMediaBinTabs({ showCreate: true })}${renderMediaSearchControls()}</li>
+      <li class="empty-state compact">Biblioteca global vazia. Use a janela de biblioteca para importar midias persistentes.</li>
+    `)
+    bindMediaBinControls('#layer-list')
+    bindMediaSearchControls('#layer-list')
     updateToolbarLabel()
     return
   }
 
-  list.html(state.mediaLibrary.map((item) => `
+  list.html(`
+    <li>${renderMediaBinTabs({ showCreate: true })}${renderMediaSearchControls()}</li>
+    ${visibleItems.length ? visibleItems.map((item) => `
     <li class="layer-item ${getClipAt(state.activeMixerRow, state.activeColumnIndex)?.mediaId === item.id ? 'selected' : ''}" data-library-id="${item.id}">
+      ${renderMediaThumb(item, 'is-browser-thumb')}
       <div class="layer-row">
         <strong>${escapeHtml(item.name)}</strong>
-        <span style="font-size:11px;color:#9fb3cc;">${escapeHtml(String(item.kind || '').toUpperCase())}</span>
+        <span style="font-size:11px;color:#9fb3cc;">${escapeHtml(getMediaKindLabel(item.kind).toUpperCase())}</span>
       </div>
       <div class="layer-row" style="margin-top:8px;">
-        <span style="font-size:11px;color:#9fb3cc;">Destino: layer ${state.activeMixerRow + 1}, coluna ${state.activeColumnIndex + 1}</span>
+        <span style="font-size:11px;color:#9fb3cc;">Destino: camada ${state.activeMixerRow + 1}, coluna ${state.activeColumnIndex + 1}</span>
         <div class="layer-actions">
           <button class="btn small" data-library-assign="${item.id}">Usar</button>
         </div>
       </div>
     </li>
-  `).join(''))
+  `).join('') : '<li class="empty-state compact">Nenhuma midia encontrada neste banco com o filtro atual.</li>'}
+  `)
 
   list.find('[data-library-assign]').on('click', (event) => {
     event.stopPropagation()
     assignMediaToSlot(Number($(event.currentTarget).attr('data-library-assign')), state.activeMixerRow, state.activeColumnIndex)
   })
+
+  bindMediaBinControls('#layer-list')
+  bindMediaSearchControls('#layer-list')
 
   updateToolbarLabel()
 }
@@ -1423,7 +2311,7 @@ function renderPropertiesPanel() {
 
   const layer = getSelectedMasterLayer()
   if (!layer) {
-    panel.html('<p>Selecione uma layer.</p>')
+    panel.html('<p>Selecione uma camada.</p>')
     return
   }
 
@@ -1432,7 +2320,7 @@ function renderPropertiesPanel() {
 
   panel.html(`
     <div class="properties-panel">
-      <label>Layer master</label>
+      <label>Camada mestre</label>
       <input id="prop-name" type="text" value="${escapeHtml(layer.name)}" />
 
       <label>Ativa</label>
@@ -1467,48 +2355,117 @@ function renderPropertiesPanel() {
           </select>
         </div>
         <div>
+          <label>Mescla</label>
+          <select id="prop-blend-mode">
+            ${getBlendModeOptions(layer.blendMode || 'add')}
+          </select>
+        </div>
+      </div>
+
+      <div class="inline-grid double">
+        <div>
+          <label>Ignorar disparo de coluna</label>
+          <select id="prop-ignore-column-trigger">
+            <option value="false" ${!layer.ignoreColumnTrigger ? 'selected' : ''}>Não</option>
+            <option value="true" ${layer.ignoreColumnTrigger ? 'selected' : ''}>Sim</option>
+          </select>
+        </div>
+        <div>
+          <label>Transicao</label>
+          <input id="prop-transition-duration" type="range" min="0" max="3" step="0.1" value="${Number(layer.transitionDuration || 0)}" />
+        </div>
+      </div>
+
+      <div class="inline-grid double">
+        <div>
+          <label>Modo de transicao</label>
+          <select id="prop-transition-mode">
+            ${getTransitionModeOptions(layer.transitionMode || 'alpha')}
+          </select>
+        </div>
+        <div>
+          <label>Autopiloto</label>
+          <select id="prop-autopilot">
+            <option value="false" ${!layer.autopilot ? 'selected' : ''}>Não</option>
+            <option value="true" ${layer.autopilot ? 'selected' : ''}>Sim</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="inline-grid double">
+        <div>
+          <label>Intervalo do autopiloto</label>
+          <input id="prop-autopilot-interval" type="range" min="2" max="30" step="1" value="${Number(layer.autopilotInterval || 8)}" />
+        </div>
+        <div>
+          <label>Camada no ar</label>
+          <input type="text" value="${escapeHtml((() => {
+            const liveClip = typeof getLiveRowEntry(state.activeMixerRow).columnIndex === 'number'
+              ? getClipLabel(getClipAt(state.activeMixerRow, getLiveRowEntry(state.activeMixerRow).columnIndex))
+              : 'Nenhum clipe no ar'
+            return liveClip
+          })())}" disabled />
+        </div>
+      </div>
+
+      <div class="inline-grid double">
+        <div>
           <label>Coluna selecionada</label>
           <input type="text" value="${escapeHtml(getClipGridSummary(state.activeColumnIndex))}" disabled />
+        </div>
+        <div>
+          <label>Estado</label>
+          <input type="text" value="${escapeHtml(getLayerStateLabel(layer))}" disabled />
         </div>
       </div>
 
       <div class="clip-editor" style="min-height:auto; margin-top: 8px;">
-        <p style="margin:0 0 6px; font-size:12px; color:#9fb3cc;">Clip selecionado</p>
-        <p style="margin:0; font-size:13px; color:#e7eef9;">${escapeHtml(selectedMedia?.name || 'Nenhum clip selecionado')}</p>
-        <p style="margin:6px 0 0; font-size:12px; color:#9fb3cc;">${escapeHtml(selectedMedia?.kind ? String(selectedMedia.kind).toUpperCase() : 'SEM CLIP')}</p>
+        <p style="margin:0 0 6px; font-size:12px; color:#9fb3cc;">Clipe selecionado</p>
+        <p style="margin:0; font-size:13px; color:#e7eef9;">${escapeHtml(selectedMedia?.name || 'Nenhum clipe selecionado')}</p>
+        <p style="margin:6px 0 0; font-size:12px; color:#9fb3cc;">${escapeHtml(selectedMedia?.kind ? getMediaKindLabel(selectedMedia.kind).toUpperCase() : 'SEM CLIPE')}</p>
       </div>
     </div>
   `)
 
   $('#prop-name').on('input', (event) => {
     layer.name = event.target.value
+    renderClipLauncher()
     renderLayerList()
+    scheduleSessionCache()
   })
 
   $('#prop-visible').on('change', (event) => {
     layer.visible = event.target.value === 'true'
+    renderClipLauncher()
     renderLayerList()
     renderSwitcherMonitors()
     notifyOutputLayers()
+    scheduleSessionCache()
   })
 
   $('#prop-opacity').on('input', (event) => {
     layer.opacity = Number(event.target.value)
     $('#prop-opacity-value').text(formatOpacity(layer.opacity))
+    renderClipLauncher()
     renderSwitcherMonitors()
     notifyOutputLayers()
+    scheduleSessionCache()
   })
 
   $('#prop-volume').on('input', (event) => {
     layer.volume = Number(event.target.value)
     renderClipLauncher()
+    renderSwitcherMonitors()
     notifyOutputLayers()
+    scheduleSessionCache()
   })
 
   $('#prop-muted').on('change', (event) => {
     layer.muted = event.target.value === 'true'
     renderClipLauncher()
+    renderSwitcherMonitors()
     notifyOutputLayers()
+    scheduleSessionCache()
   })
 
   $('#prop-solo').on('change', (event) => {
@@ -1516,6 +2473,47 @@ function renderPropertiesPanel() {
     renderClipLauncher()
     renderSwitcherMonitors()
     notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  $('#prop-blend-mode').on('change', (event) => {
+    layer.blendMode = event.target.value
+    renderClipLauncher()
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+    scheduleSessionCache()
+  })
+
+  $('#prop-ignore-column-trigger').on('change', (event) => {
+    layer.ignoreColumnTrigger = event.target.value === 'true'
+    renderClipLauncher()
+    scheduleSessionCache()
+  })
+
+  $('#prop-transition-duration').on('input', (event) => {
+    layer.transitionDuration = Number(event.target.value)
+    renderClipLauncher()
+    scheduleSessionCache()
+  })
+
+  $('#prop-transition-mode').on('change', (event) => {
+    layer.transitionMode = event.target.value
+    renderClipLauncher()
+    scheduleSessionCache()
+  })
+
+  $('#prop-autopilot').on('change', (event) => {
+    layer.autopilot = event.target.value === 'true'
+    clearAutopilotState(state.activeMixerRow)
+    renderClipLauncher()
+    scheduleSessionCache()
+  })
+
+  $('#prop-autopilot-interval').on('input', (event) => {
+    layer.autopilotInterval = Number(event.target.value)
+    clearAutopilotState(state.activeMixerRow)
+    renderClipLauncher()
+    scheduleSessionCache()
   })
 
   panel.find('input, select, textarea').on('input.session-cache change.session-cache', () => {
@@ -1607,7 +2605,7 @@ async function addNdiInputLayer() {
 
 function addTextInputLayer() {
   const suggestedName = `Texto ${state.nextMediaId}`
-  const name = prompt('Nome do clip de texto', suggestedName)
+  const name = prompt('Nome do clipe de texto', suggestedName)
   if (name === null) return
 
   const text = prompt('Conteúdo do texto', 'Novo texto')
@@ -1649,11 +2647,119 @@ function upsertBibleLayer(verse) {
   closeBibleModal()
   closeGlobalMediaOverlay()
   scheduleSessionCache()
-  renderToast(`Versículo carregado: ${verse.ref}`)
+  renderToast(`Versiculo carregado: ${verse.ref}`)
 }
 
 function closeBibleModal() {
   $('#bible-modal').remove()
+}
+
+function renderBibleVersionCatalog() {
+  const host = $('#bible-version-library')
+  if (!host.length) return
+
+  const activeVersion = String(state.bible.version || 'NVI')
+  const activeEntry = state.bible.catalog.find((entry) => entry.version === activeVersion)
+  const progress = state.bible.downloadState
+  const busy = Boolean(progress && progress.stage !== 'concluido' && progress.stage !== 'erro')
+
+  host.html(state.bible.catalog.map((entry) => {
+    const statusLabel = entry.isOfflineReady
+      ? `${entry.verseCount} versiculos offline`
+      : entry.downloadable
+        ? 'Download publico disponivel'
+        : 'Importe um JSON proprio'
+
+    return `
+      <button class="bible-version-card ${entry.version === activeVersion ? 'is-active' : ''}" data-bible-version-select="${entry.version}">
+        <strong>${escapeHtml(entry.version)}</strong>
+        <span>${escapeHtml(entry.label)}</span>
+        <small>${escapeHtml(statusLabel)}</small>
+      </button>
+    `
+  }).join(''))
+
+  host.find('[data-bible-version-select]').on('click', (event) => {
+    state.bible.version = String($(event.currentTarget).attr('data-bible-version-select'))
+    $('#bible-version').val(state.bible.version)
+    renderBibleVersionCatalog()
+  })
+
+  $('#bible-version-status').text(progress?.message || (
+    activeEntry?.isOfflineReady
+      ? `${activeEntry.label} pronta para busca offline.`
+      : activeEntry?.downloadable
+        ? `${activeEntry.label} pode ser baixada para uso offline.`
+        : `${activeEntry?.label || activeVersion} depende de importacao manual para uso offline completo.`
+  ))
+
+  $('#bible-download-version')
+    .prop('disabled', busy || !activeEntry?.downloadable)
+    .text(activeEntry?.downloadable ? `Baixar ${activeEntry.version}` : 'Sem download publico')
+
+  $('#bible-import-version')
+    .prop('disabled', busy || !window.mediaLayers?.bibliaImportJson)
+}
+
+async function loadBibleVersionCatalog() {
+  if (!window.mediaLayers?.bibliaListVersions) return
+
+  try {
+    state.bible.catalog = await window.mediaLayers.bibliaListVersions()
+    renderBibleVersionCatalog()
+  } catch (error) {
+    reportRendererError('biblia-catalog', error)
+    state.bible.downloadState = { stage: 'erro', message: `Falha ao carregar catalogo: ${error.message}` }
+    renderBibleVersionCatalog()
+  }
+}
+
+async function downloadBibleVersion(version = state.bible.version) {
+  if (!window.mediaLayers?.bibliaDownload) return
+
+  try {
+    state.bible.downloadState = { stage: 'baixando', version, message: `Preparando download de ${version}...` }
+    renderBibleVersionCatalog()
+    await window.mediaLayers.bibliaDownload(version)
+    await loadBibleVersionCatalog()
+  } catch (error) {
+    state.bible.downloadState = { stage: 'erro', version, message: `Falha no download: ${error.message}` }
+    renderBibleVersionCatalog()
+    renderToast(`Falha ao baixar Biblia ${version}: ${error.message}`)
+  }
+}
+
+async function downloadPublicBibleLibrary() {
+  const queue = state.bible.catalog.filter((entry) => entry.downloadable && !entry.isOfflineReady)
+  if (!queue.length) {
+    renderToast('Nao ha versoes publicas pendentes para baixar')
+    return
+  }
+
+  for (const entry of queue) {
+    await downloadBibleVersion(entry.version)
+  }
+}
+
+async function importBibleVersionJson(version = state.bible.version) {
+  if (!window.mediaLayers?.bibliaImportJson) return
+
+  try {
+    state.bible.downloadState = { stage: 'importando', version, message: `Aguardando arquivo para ${version}...` }
+    renderBibleVersionCatalog()
+    const result = await window.mediaLayers.bibliaImportJson(version)
+    if (result?.canceled) {
+      state.bible.downloadState = null
+      renderBibleVersionCatalog()
+      return
+    }
+
+    await loadBibleVersionCatalog()
+  } catch (error) {
+    state.bible.downloadState = { stage: 'erro', version, message: `Falha na importacao: ${error.message}` }
+    renderBibleVersionCatalog()
+    renderToast(`Falha ao importar Biblia ${version}: ${error.message}`)
+  }
 }
 
 function renderBibleResults() {
@@ -1726,7 +2832,7 @@ function openBibleModal() {
         <div class="modal-head">
           <div>
             <strong>Versículos</strong>
-            <p>Busque por referência ou trecho e envie para preview/program.</p>
+            <p>Busque por referencia ou trecho e envie para previa/programa.</p>
           </div>
           <button id="bible-close" class="icon-btn" aria-label="Fechar">✕</button>
         </div>
@@ -1734,11 +2840,20 @@ function openBibleModal() {
           <div class="modal-section">
             <label>Versão</label>
             <select id="bible-version">
+              <option value="AA" ${state.bible.version === 'AA' ? 'selected' : ''}>AA</option>
               <option value="NVI" ${state.bible.version === 'NVI' ? 'selected' : ''}>NVI</option>
               <option value="ARA" ${state.bible.version === 'ARA' ? 'selected' : ''}>ARA</option>
               <option value="ACF" ${state.bible.version === 'ACF' ? 'selected' : ''}>ACF</option>
               <option value="NTLH" ${state.bible.version === 'NTLH' ? 'selected' : ''}>NTLH</option>
+              <option value="KJA" ${state.bible.version === 'KJA' ? 'selected' : ''}>KJA</option>
             </select>
+            <div id="bible-version-status" class="bible-version-status">Carregando catalogo...</div>
+            <div class="bible-version-actions">
+              <button id="bible-download-version" class="btn">Baixar versao</button>
+              <button id="bible-import-version" class="btn">Importar JSON</button>
+              <button id="bible-download-public" class="btn">Baixar acervo publico</button>
+            </div>
+            <div id="bible-version-library" class="bible-version-library"></div>
             <label>Livro</label>
             <select id="bible-book">
               ${BIBLE_BOOKS.map((book) => `<option value="${book}">${book}</option>`).join('')}
@@ -1773,13 +2888,19 @@ function openBibleModal() {
   $('#bible-close').on('click', closeBibleModal)
   $('#bible-version').on('change', (event) => {
     state.bible.version = event.target.value
+    renderBibleVersionCatalog()
   })
+  $('#bible-download-version').on('click', () => downloadBibleVersion())
+  $('#bible-import-version').on('click', () => importBibleVersionJson())
+  $('#bible-download-public').on('click', () => downloadPublicBibleLibrary())
   $('#bible-search-reference').on('click', () => searchBible('reference'))
   $('#bible-search-text').on('click', () => searchBible('text'))
   $('#bible-query').on('keydown', (event) => {
     if (event.key === 'Enter') searchBible('text')
   })
   renderBibleResults()
+  renderBibleVersionCatalog()
+  loadBibleVersionCatalog().catch(() => {})
 }
 
 function addBibleLayer() {
@@ -1787,12 +2908,12 @@ function addBibleLayer() {
 }
 
 function addBrowserSourceLayer() {
-  const url = prompt('URL da Browser Source (https://...)', 'https://example.com')
+  const url = prompt('URL da fonte web (https://...)', 'https://example.com')
   if (!url) return
   const item = upsertMediaLibraryItem({
     id: state.nextMediaId++,
     kind: 'browser',
-    name: `Browser ${state.nextMediaId - 1}`,
+    name: `Web ${state.nextMediaId - 1}`,
     url,
     createdAt: new Date().toISOString()
   })
@@ -1985,15 +3106,29 @@ function renderGlobalMediaOverlayLibrary() {
   const host = $('#global-media-library-grid')
   if (!host.length) return
 
+  ensureMediaBins()
+  const visibleItems = getFilteredMediaItemsForActiveBin()
+  $('#global-media-bin-strip').html(renderMediaBinTabs({ showCreate: true }))
+  bindMediaBinControls('#global-media-panel')
+  bindMediaSearchControls('#global-media-panel')
+  $('#global-media-active-bin-label').text(getActiveMediaBin()?.name || 'Acervo')
+  $('#global-media-filter-summary').text(`${visibleItems.length} de ${getMediaItemsForActiveBin().length} item(ns) visivel(is)`)
+
   if (!state.mediaLibrary.length) {
-    host.html('<div class="empty-state compact">A biblioteca global ainda está vazia. Importe arquivos ou crie uma fonte a partir das ações acima.</div>')
+    host.html('<div class="empty-state compact">A biblioteca global ainda esta vazia. Importe arquivos ou crie uma fonte a partir das acoes acima.</div>')
     return
   }
 
-  host.html(state.mediaLibrary.map((item) => `
+  if (!visibleItems.length) {
+    host.html('<div class="empty-state compact">Nenhuma midia encontrada neste banco com o filtro atual.</div>')
+    return
+  }
+
+  host.html(visibleItems.map((item) => `
     <button class="global-media-card" data-library-item="${item.id}">
+      ${renderMediaThumb(item, 'is-browser-thumb')}
       <strong>${escapeHtml(item.name)}</strong>
-      <span>${escapeHtml(String(item.kind || '').toUpperCase())}</span>
+      <span>${escapeHtml(getMediaKindLabel(item.kind).toUpperCase())}</span>
       <small>${escapeHtml(item.sourcePath || item.url || item.text || 'Biblioteca global')}</small>
     </button>
   `).join(''))
@@ -2018,8 +3153,8 @@ function openGlobalMediaOverlay(options = {}) {
       <div class="global-media-panel">
         <div class="global-media-head">
           <div>
-            <strong>Biblioteca global de mídias</strong>
-            <p>Overlay único para importar, reutilizar e atribuir clips às colunas. Destino atual: layer ${state.mediaOverlay.targetRow + 1}, coluna ${state.mediaOverlay.targetColumn + 1}.</p>
+            <strong>Biblioteca global de midias</strong>
+            <p>Janela unica para importar, reutilizar e atribuir clipes as colunas. Destino atual: camada ${state.mediaOverlay.targetRow + 1}, coluna ${state.mediaOverlay.targetColumn + 1}.</p>
           </div>
           <button id="global-media-close" class="icon-btn" aria-label="Fechar">✕</button>
         </div>
@@ -2031,26 +3166,28 @@ function openGlobalMediaOverlay(options = {}) {
             </button>
             <button class="quick-media-card" data-overlay-action="text">
               <strong>Texto</strong>
-              <span>Cria um clip de texto reutilizável para a célula selecionada.</span>
+              <span>Cria um clipe de texto reutilizavel para a celula selecionada.</span>
             </button>
             <button class="quick-media-card" data-overlay-action="bible">
-              <strong>Versículo</strong>
-              <span>Busca um versículo e adiciona como clip reutilizável.</span>
+              <strong>Versiculo</strong>
+              <span>Busca um versiculo e adiciona como clipe reutilizavel.</span>
             </button>
             <button class="quick-media-card" data-overlay-action="ndi">
               <strong>Entrada NDI</strong>
               <span>Salva uma fonte NDI na biblioteca para disparo por coluna.</span>
             </button>
             <button class="quick-media-card" data-overlay-action="browser">
-              <strong>Browser Source</strong>
-              <span>Adiciona uma URL persistente à biblioteca global.</span>
+              <strong>Fonte web</strong>
+              <span>Adiciona uma URL persistente a biblioteca global.</span>
             </button>
           </aside>
           <section class="global-media-content">
             <div class="global-media-content-head">
-              <strong>Lista única de mídias</strong>
-              <span>${state.mediaLibrary.length} item(ns) disponível(is)</span>
+              <strong>Banco: <span id="global-media-active-bin-label">${escapeHtml(getActiveMediaBin()?.name || 'Acervo')}</span></strong>
+              <span id="global-media-filter-summary">${state.mediaLibrary.length} item(ns) disponivel(is)</span>
             </div>
+            <div id="global-media-bin-strip"></div>
+            ${renderMediaSearchControls()}
             <div id="global-media-library-grid" class="global-media-library-grid"></div>
           </section>
         </div>
@@ -2155,30 +3292,30 @@ function renderToolbar() {
       <div class="brand-mark">ML</div>
       <div>
         <strong class="brand-title">MediaLayers</strong>
-        <span class="brand-subtitle">Switcher em tempo real</span>
+        <span class="brand-subtitle">Disparo de clipes / mixer de camadas</span>
       </div>
     </div>
     <div class="toolbar-group">
       <button id="save-layout" class="toolbar-btn">Salvar sessão</button>
       <button id="restore-layout" class="toolbar-btn">Restaurar</button>
-      <button id="reset-layout" class="toolbar-btn danger">Reset</button>
+      <button id="reset-layout" class="toolbar-btn danger">Reiniciar</button>
     </div>
     <div class="toolbar-group">
-      <button id="open-media-modal" class="toolbar-btn">Adicionar mídia</button>
+      <button id="open-media-modal" class="toolbar-btn">Adicionar midia</button>
     </div>
     <div class="toolbar-group toolbar-menu-group">
       <button id="plugin-menu-toggle" class="toolbar-btn">Plugins ▾</button>
       <div id="plugin-menu" class="toolbar-menu">
-        <button id="btn-plugin-texto" class="toolbar-menu-item">Plugin Texto: ON</button>
-        <button id="btn-plugin-biblia" class="toolbar-menu-item">Plugin Bíblia: ON</button>
+        <button id="btn-plugin-texto" class="toolbar-menu-item">Plugin Texto: ATIVO</button>
+        <button id="btn-plugin-biblia" class="toolbar-menu-item">Plugin Biblia: ATIVO</button>
         <button id="btn-refresh-diagnostics" class="toolbar-menu-item">Atualizar diagnóstico</button>
       </div>
     </div>
     <div class="toolbar-group">
-      <button id="start-ndi-output" class="toolbar-btn success">NDI On</button>
-      <button id="stop-ndi-output" class="toolbar-btn warning">NDI Off</button>
+      <button id="start-ndi-output" class="toolbar-btn success">Iniciar NDI</button>
+      <button id="stop-ndi-output" class="toolbar-btn warning">Parar NDI</button>
     </div>
-    <span id="selected-layer-label" class="layer-label">Layer ativo: -</span>
+    <span id="selected-layer-label" class="layer-label">Camada ativa - • Coluna - • Programa -</span>
     <div id="app-toast-host" class="app-toast-host"></div>
   `)
 
@@ -2187,8 +3324,8 @@ function renderToolbar() {
 }
 
 function refreshPluginButtons() {
-  $('#btn-plugin-texto').text(`Plugin Texto: ${state.plugins.texto ? 'ON' : 'OFF'}`)
-  $('#btn-plugin-biblia').text(`Plugin Biblia: ${state.plugins.biblia ? 'ON' : 'OFF'}`)
+  $('#btn-plugin-texto').text(`Plugin Texto: ${state.plugins.texto ? 'ATIVO' : 'INATIVO'}`)
+  $('#btn-plugin-biblia').text(`Plugin Biblia: ${state.plugins.biblia ? 'ATIVO' : 'INATIVO'}`)
   $('#btn-plugin-text-action').prop('disabled', !state.plugins.texto)
   $('#btn-plugin-biblia-action').prop('disabled', !state.plugins.biblia)
 }
@@ -2411,23 +3548,23 @@ function createDefaultLayoutConfig() {
       {
         type: 'column',
         content: [
-          { type: 'component', componentName: 'timeline', height: 15, title: 'Timeline', isClosable: false },
+          { type: 'component', componentName: 'timeline', height: 15, title: 'Colunas', isClosable: false },
           {
             type: 'row',
             height: 65,
             content: [
-              { type: 'component', componentName: 'inputs', width: 20, title: 'Entradas', isClosable: false },
+              { type: 'component', componentName: 'inputs', width: 18, title: 'Navegador de Midias', isClosable: false },
               {
                 type: 'stack',
-                width: 50,
+                width: 58,
                 content: [
-                  { type: 'component', componentName: 'switcher', title: 'Preview / Program', isClosable: false },
-                  { type: 'component', componentName: 'program', title: 'Program Clean', isClosable: false }
+                  { type: 'component', componentName: 'switcher', title: 'Composicao', isClosable: false },
+                  { type: 'component', componentName: 'program', title: 'Programa limpo', isClosable: false }
                 ]
               },
               {
                 type: 'stack',
-                width: 30,
+                width: 24,
                 content: [
                   { type: 'component', componentName: 'properties', title: 'Propriedades', isClosable: false },
                   { type: 'component', componentName: 'remote', title: 'Controle Remoto', isClosable: false },
@@ -2437,7 +3574,7 @@ function createDefaultLayoutConfig() {
               }
             ]
           },
-          { type: 'component', componentName: 'clips', height: 20, title: 'Editor de Clipes', isClosable: false }
+          { type: 'component', componentName: 'clips', height: 20, title: 'Deck', isClosable: false }
         ]
       }
     ]
@@ -2472,20 +3609,24 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('switcher', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Preview / Program 1920x1080</div>
+        <div class="panel-title">Previa / Programa 1920x1080</div>
         <div class="switcher-wrap">
           <div class="monitor">
-            <div class="monitor-head" id="preview-state">Preview</div>
+            <div class="monitor-head" id="preview-state">Previa</div>
             <div class="monitor-stage"><canvas id="preview-canvas" width="1920" height="1080"></canvas></div>
           </div>
           <div class="monitor">
-            <div class="monitor-head" id="program-state">Program</div>
-            <div class="monitor-stage"><canvas id="program-canvas" width="1920" height="1080"></canvas></div>
+            <div class="monitor-head" id="program-state">Programa</div>
+            <div id="program-stage" class="monitor-stage is-fit-mode"><canvas id="program-canvas" width="1920" height="1080"></canvas></div>
           </div>
         </div>
         <div class="switcher-actions">
           <button id="btn-cut" class="btn">Disparar coluna selecionada</button>
-          <button id="btn-clear-program" class="btn">Clear Program</button>
+          <button id="btn-clear-program" class="btn">Limpar programa</button>
+          <select id="program-view-mode" class="btn">
+            <option value="fit" ${state.programViewMode === 'fit' ? 'selected' : ''}>Programa: ajustar ao painel</option>
+            <option value="fixed-1920" ${state.programViewMode === 'fixed-1920' ? 'selected' : ''}>Programa: 1920x1080</option>
+          </select>
         </div>
       </div>
     `)
@@ -2498,9 +3639,18 @@ function registerGoldenComponents(goldenLayout) {
 
     $('#btn-clear-program').on('click', () => {
       state.liveColumnIndex = null
+      state.liveRows = state.liveRows.map(() => ({ columnIndex: null }))
+      state.rowTransitions = {}
+      renderTimelineOverview()
       renderClipLauncher()
       renderSwitcherMonitors()
       notifyOutputLayers()
+    })
+
+    $('#program-view-mode').on('change', (event) => {
+      state.programViewMode = event.target.value === 'fixed-1920' ? 'fixed-1920' : 'fit'
+      applyProgramViewMode()
+      scheduleSessionCache()
     })
 
     renderSwitcherMonitors()
@@ -2509,8 +3659,8 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('program', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Program Feed</div>
-        <p style="font-size:12px;color:#9fb3cc;">A janela de output recebe o mesmo estado de program em tempo real.</p>
+        <div class="panel-title">Saida limpa</div>
+        <p style="font-size:12px;color:#9fb3cc;">A janela de saida recebe o mesmo estado do programa em tempo real.</p>
       </div>
     `)
   })
@@ -2518,7 +3668,7 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('properties', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Properties Inspector</div>
+        <div class="panel-title">Inspetor de propriedades</div>
         <div id="properties-panel" class="properties-panel"></div>
       </div>
     `)
@@ -2559,7 +3709,7 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('clips', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Clips / Layers</div>
+        <div class="panel-title">Clipes / Camadas</div>
         <div id="clips-panel" class="clip-editor clip-launcher-panel"></div>
       </div>
     `)
@@ -2653,7 +3803,13 @@ function startRenderLoop() {
   if (state.renderLoopId) return
 
   const loop = () => {
+    const hadTransitions = hasActiveTransitions()
+    runAutopilotTick()
+    updateDeckRuntimeIndicators()
     renderSwitcherMonitors()
+    if (hadTransitions || hasActiveTransitions()) {
+      notifyOutputLayers()
+    }
     state.renderLoopId = requestAnimationFrame(loop)
   }
 
@@ -2681,6 +3837,8 @@ function registerRemoteCommands() {
 
     if (command.type === 'clear') {
       state.liveColumnIndex = null
+      state.liveRows = state.liveRows.map(() => ({ columnIndex: null }))
+      state.rowTransitions = {}
       renderTimelineOverview()
       renderClipLauncher()
       renderLayerList()
@@ -2778,6 +3936,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   initState(savedSession)
+  scheduleMediaThumbGeneration(state.mediaLibrary)
+
+  if (window.mediaLayers?.onBibliaProgress) {
+    window.mediaLayers.onBibliaProgress((payload) => {
+      state.bible.downloadState = payload || null
+      renderBibleVersionCatalog()
+
+      if (payload?.stage === 'concluido') {
+        loadBibleVersionCatalog().catch(() => {})
+      }
+    })
+  }
+
   setupBuiltinPlugins()
   exposeLegacyGlobals()
   registerNdiFrameHandler()

@@ -24,6 +24,22 @@ function httpGet(url) {
   })
 }
 
+async function setRangeValue(page, selector, value) {
+  await page.locator(selector).evaluate((element, nextValue) => {
+    element.value = String(nextValue)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+  }, value)
+}
+
+async function setSelectValue(page, selector, value) {
+  await page.locator(selector).evaluate((element, nextValue) => {
+    element.value = String(nextValue)
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+  }, value)
+}
+
 async function waitForRemoteHealth() {
   let lastError = null
   for (let i = 0; i < 20; i += 1) {
@@ -96,12 +112,12 @@ async function main() {
     await page.waitForSelector('#plugin-menu.is-open', { timeout: 5000 })
 
     const selectedLabel = await page.textContent('#selected-layer-label')
-    if (!selectedLabel || !selectedLabel.includes('Layer ativa')) {
+    if (!selectedLabel || !selectedLabel.includes('Camada ativa')) {
       throw new Error('Toolbar não exibiu a camada ativa')
     }
 
     const propName = await page.inputValue('#prop-name')
-    if (!propName || !propName.includes('Layer')) {
+    if (!propName || (!propName.includes('Camada') && !propName.includes('Layer'))) {
       throw new Error('Inspector não exibiu a layer master selecionada')
     }
 
@@ -110,13 +126,13 @@ async function main() {
       throw new Error('Versículo não foi carregado no clip selecionado')
     }
 
-    await page.fill('#prop-opacity', '0.5')
-    await page.fill('#prop-volume', '0.4')
-    await page.selectOption('#prop-muted', 'true')
+    await setRangeValue(page, '#prop-opacity', 0.5)
+    await setRangeValue(page, '#prop-volume', 0.4)
+    await setSelectValue(page, '#prop-muted', 'true')
 
     const mutedValue = await page.inputValue('#prop-muted')
     if (mutedValue !== 'true') {
-      throw new Error('Controles master da layer não foram aplicados no inspector')
+      throw new Error('Controles master da camada não foram aplicados no inspector')
     }
 
     await waitForRemoteHealth()
