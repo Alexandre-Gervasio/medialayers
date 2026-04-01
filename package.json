@@ -1,6 +1,6 @@
 {
   "name": "medialayers",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Software de apresentação com camadas de mídia para igrejas e eventos",
   "author": "MediaLayers Team",
   "license": "MIT",
@@ -24,7 +24,8 @@
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "rebuild:native:win": "electron-rebuild -f -w better-sqlite3 --arch=x64",
     "ci:smoke": "node ./scripts/ci-smoke.js",
-    "release:check": "node ./scripts/release-check.js"
+    "release:check": "node ./scripts/release-check.js",
+    "test:e2e": "node ./scripts/e2e-ui.js"
   },
   "dependencies": {
     "electron-updater": "^6.6.2",
@@ -37,7 +38,8 @@
   "devDependencies": {
     "@electron/rebuild": "^3.7.1",
     "electron": "^41.1.0",
-    "electron-builder": "^26.8.1"
+    "electron-builder": "^26.8.1",
+    "playwright-core": "^1.54.2"
   },
   "build": {
     "appId": "com.medialayers.app",

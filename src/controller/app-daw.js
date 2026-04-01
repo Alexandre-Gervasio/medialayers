@@ -10,6 +10,17 @@ const outputConfig = {
   fps: 15
 }
 
+const BIBLE_BOOKS = [
+  'Gênesis', 'Êxodo', 'Levítico', 'Números', 'Deuteronômio', 'Josué', 'Juízes', 'Rute',
+  '1 Samuel', '2 Samuel', '1 Reis', '2 Reis', '1 Crônicas', '2 Crônicas', 'Esdras', 'Neemias',
+  'Ester', 'Jó', 'Salmos', 'Provérbios', 'Eclesiastes', 'Cantares', 'Isaías', 'Jeremias',
+  'Lamentações', 'Ezequiel', 'Daniel', 'Oséias', 'Joel', 'Amós', 'Obadias', 'Jonas', 'Miquéias',
+  'Naum', 'Habacuque', 'Sofonias', 'Ageu', 'Zacarias', 'Malaquias', 'Mateus', 'Marcos', 'Lucas',
+  'João', 'Atos', 'Romanos', '1 Coríntios', '2 Coríntios', 'Gálatas', 'Efésios', 'Filipenses',
+  'Colossenses', '1 Tessalonicenses', '2 Tessalonicenses', '1 Timóteo', '2 Timóteo', 'Tito',
+  'Filemom', 'Hebreus', 'Tiago', '1 Pedro', '2 Pedro', '1 João', '2 João', '3 João', 'Judas', 'Apocalipse'
+]
+
 const LAYOUT_STORAGE_KEY = 'medialayers-golden-layout-v3'
 
 const state = {
@@ -35,9 +46,26 @@ const state = {
     currentVersion: '0.0.0',
     state: null
   },
+  diagnostics: {
+    items: [],
+    logPath: '',
+    sessionStartedAt: ''
+  },
+  transform: {
+    active: false,
+    mode: null,
+    layerId: null,
+    startPointer: null,
+    startBounds: null,
+    guides: []
+  },
   plugins: {
     texto: true,
     biblia: true
+  },
+  bible: {
+    version: 'NVI',
+    results: []
   }
 }
 
@@ -55,6 +83,12 @@ function createLayer(type, name, extra = {}) {
     url: '',
     text: '',
     sourceIndex: 0,
+    x: 0,
+    y: 0,
+    width: null,
+    height: null,
+    rotation: 0,
+    preserveAspect: true,
     frame: null,
     element: null,
     ...extra
@@ -81,8 +115,117 @@ function getProgramLayers() {
   return state.layers.filter((l) => state.programLayerIds.includes(l.id))
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function getLayerBounds(layer, canvas) {
+  const defaultsByType = {
+    text: { width: Math.min(canvas.width * 0.78, 980), height: 220 },
+    audio: { width: Math.min(canvas.width - 60, 900), height: 120 },
+    browser: { width: canvas.width - 40, height: canvas.height - 40 },
+    image: { width: canvas.width, height: canvas.height },
+    video: { width: canvas.width, height: canvas.height },
+    ndi: { width: canvas.width, height: canvas.height }
+  }
+
+  const defaults = defaultsByType[layer.type] || { width: canvas.width, height: canvas.height }
+
+  return {
+    x: Number(layer.x || 0),
+    y: Number(layer.y || 0),
+    width: Number(layer.width || defaults.width),
+    height: Number(layer.height || defaults.height),
+    rotation: Number(layer.rotation || 0),
+    preserveAspect: layer.preserveAspect !== false
+  }
+}
+
+function applySnap(candidates, threshold = 12) {
+  for (const candidate of candidates) {
+    if (Math.abs(candidate.distance) <= threshold) {
+      return {
+        value: candidate.snapTo,
+        guide: { axis: candidate.axis, value: candidate.guideLine }
+      }
+    }
+  }
+
+  return { value: candidates[0]?.original ?? 0, guide: null }
+}
+
+function snapBounds(bounds, canvas) {
+  const snappedX = applySnap([
+    { axis: 'vertical', original: bounds.x, snapTo: 0, guideLine: 0, distance: bounds.x },
+    {
+      axis: 'vertical',
+      original: bounds.x,
+      snapTo: canvas.width / 2 - bounds.width / 2,
+      guideLine: canvas.width / 2,
+      distance: bounds.x + bounds.width / 2 - canvas.width / 2
+    },
+    {
+      axis: 'vertical',
+      original: bounds.x,
+      snapTo: canvas.width - bounds.width,
+      guideLine: canvas.width,
+      distance: bounds.x + bounds.width - canvas.width
+    }
+  ])
+
+  const snappedY = applySnap([
+    { axis: 'horizontal', original: bounds.y, snapTo: 0, guideLine: 0, distance: bounds.y },
+    {
+      axis: 'horizontal',
+      original: bounds.y,
+      snapTo: canvas.height / 2 - bounds.height / 2,
+      guideLine: canvas.height / 2,
+      distance: bounds.y + bounds.height / 2 - canvas.height / 2
+    },
+    {
+      axis: 'horizontal',
+      original: bounds.y,
+      snapTo: canvas.height - bounds.height,
+      guideLine: canvas.height,
+      distance: bounds.y + bounds.height - canvas.height
+    }
+  ])
+
+  return {
+    bounds: {
+      ...bounds,
+      x: snappedX.value,
+      y: snappedY.value
+    },
+    guides: [snappedX.guide, snappedY.guide].filter(Boolean)
+  }
+}
+
+function getPreviewTransformLayer() {
+  return getLayerById(state.previewLayerId)
+}
+
 function updateToolbarLabel() {
   $('#selected-layer-label').text(`Layer ativo: ${state.selectedLayerId || '-'}`)
+}
+
+function formatOpacity(value) {
+  return `${Math.round(Number(value || 0) * 100)}%`
+}
+
+function renderToast(message) {
+  const host = $('#app-toast-host')
+  if (!host.length) return
+
+  const toast = $(`<div class="app-toast">${escapeHtml(message)}</div>`)
+  host.append(toast)
+  setTimeout(() => {
+    toast.addClass('is-visible')
+  }, 10)
+  setTimeout(() => {
+    toast.removeClass('is-visible')
+    setTimeout(() => toast.remove(), 180)
+  }, 2600)
 }
 
 function copyText(text) {
@@ -99,6 +242,21 @@ function copyText(text) {
   area.select()
   document.execCommand('copy')
   area.remove()
+  renderToast('Link copiado')
+}
+
+function reportRendererError(scope, error, extra = {}) {
+  if (!window.mediaLayers?.telemetryReportError) return
+
+  const payload = {
+    level: 'error',
+    scope,
+    message: error?.message || String(error),
+    stack: error?.stack,
+    extra
+  }
+
+  window.mediaLayers.telemetryReportError(payload)
 }
 
 function notifyOutputLayers() {
@@ -116,6 +274,11 @@ function notifyOutputLayers() {
       text: layer.text,
       src: layer.src,
       url: layer.url,
+      x: typeof layer.x === 'number' ? layer.x : 0,
+      y: typeof layer.y === 'number' ? layer.y : 0,
+      width: typeof layer.width === 'number' ? layer.width : null,
+      height: typeof layer.height === 'number' ? layer.height : null,
+      rotation: typeof layer.rotation === 'number' ? layer.rotation : 0,
       fontColor: layer.color || '#ffffff',
       fontSize: 52,
       fontBg: 'rgba(0,0,0,0.45)'
@@ -181,9 +344,40 @@ function drawNdiLayer(ctx, layer, canvas) {
     temp.height = frame.yres
     const tempCtx = temp.getContext('2d')
     tempCtx.putImageData(imageData, 0, 0)
-    ctx.drawImage(temp, 0, 0, canvas.width, canvas.height)
+    const bounds = getLayerBounds(layer, canvas)
+    drawLayerBox(ctx, temp, bounds)
   } catch (error) {
     console.warn('[DAW] Falha ao desenhar frame NDI', error)
+  }
+}
+
+function drawLayerBox(ctx, source, bounds) {
+  ctx.save()
+  ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+  ctx.rotate((bounds.rotation * Math.PI) / 180)
+  ctx.drawImage(source, -bounds.width / 2, -bounds.height / 2, bounds.width, bounds.height)
+  ctx.restore()
+}
+
+function drawWrappedText(ctx, text, bounds, lineHeight = 52) {
+  const maxWidth = Math.max(80, bounds.width - 30)
+  const words = String(text || '').split(/\s+/)
+  let line = ''
+  let cursorY = -bounds.height / 2 + 40
+
+  words.forEach((word) => {
+    const testLine = line ? `${line} ${word}` : word
+    if (ctx.measureText(testLine).width > maxWidth && line) {
+      ctx.fillText(line, -bounds.width / 2 + 15, cursorY)
+      line = word
+      cursorY += lineHeight
+    } else {
+      line = testLine
+    }
+  })
+
+  if (line) {
+    ctx.fillText(line, -bounds.width / 2 + 15, cursorY)
   }
 }
 
@@ -197,27 +391,43 @@ function drawLayer(ctx, layer, canvas) {
   } else if (layer.type === 'image' || layer.type === 'video') {
     const element = ensureLayerMediaElement(layer)
     if (element && element.readyState !== 0) {
-      ctx.drawImage(element, 0, 0, canvas.width, canvas.height)
+      const bounds = getLayerBounds(layer, canvas)
+      drawLayerBox(ctx, element, bounds)
     }
   } else if (layer.type === 'text') {
+    const bounds = getLayerBounds(layer, canvas)
+    ctx.save()
+    ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    ctx.rotate((bounds.rotation * Math.PI) / 180)
     ctx.fillStyle = layer.color || '#ffffff'
     ctx.font = layer.font || 'bold 44px Segoe UI'
-    ctx.fillText(layer.text || layer.name, 40, 80)
+    drawWrappedText(ctx, layer.text || layer.name, bounds, 52)
+    ctx.restore()
   } else if (layer.type === 'audio') {
+    const bounds = getLayerBounds(layer, canvas)
+    ctx.save()
+    ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    ctx.rotate((bounds.rotation * Math.PI) / 180)
     ctx.fillStyle = '#1f2d45'
-    ctx.fillRect(30, 30, canvas.width - 60, 120)
+    ctx.fillRect(-bounds.width / 2, -bounds.height / 2, bounds.width, bounds.height)
     ctx.fillStyle = '#d0d9e8'
     ctx.font = 'bold 22px Segoe UI'
-    ctx.fillText(`Audio: ${layer.name}`, 50, 100)
+    ctx.fillText(`Audio: ${layer.name}`, -bounds.width / 2 + 20, 10)
+    ctx.restore()
   } else if (layer.type === 'browser') {
+    const bounds = getLayerBounds(layer, canvas)
+    ctx.save()
+    ctx.translate(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
+    ctx.rotate((bounds.rotation * Math.PI) / 180)
     ctx.fillStyle = '#0f2f46'
-    ctx.fillRect(20, 20, canvas.width - 40, canvas.height - 40)
+    ctx.fillRect(-bounds.width / 2, -bounds.height / 2, bounds.width, bounds.height)
     ctx.fillStyle = '#9fd4ff'
     ctx.font = 'bold 18px Segoe UI'
-    ctx.fillText('Browser Source', 40, 60)
+    ctx.fillText('Browser Source', -bounds.width / 2 + 20, -bounds.height / 2 + 30)
     ctx.fillStyle = '#e7eef9'
     ctx.font = '14px monospace'
-    ctx.fillText(layer.url || '', 40, 90)
+    drawWrappedText(ctx, layer.url || '', bounds, 20)
+    ctx.restore()
   }
 
   ctx.globalAlpha = 1
@@ -227,6 +437,75 @@ function clearCanvas(canvas, ctx) {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.fillStyle = '#000'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
+}
+
+function drawTransformOverlay(canvasId, layerId) {
+  if (canvasId !== 'preview-canvas') return
+
+  const canvas = document.getElementById(canvasId)
+  const ctx = canvas?.getContext('2d')
+  const layer = getLayerById(layerId)
+  if (!canvas || !ctx || !layer) return
+
+  const bounds = getLayerBounds(layer, canvas)
+  const angle = (bounds.rotation * Math.PI) / 180
+  const cx = bounds.x + bounds.width / 2
+  const cy = bounds.y + bounds.height / 2
+
+  const corners = [
+    { x: -bounds.width / 2, y: -bounds.height / 2 },
+    { x: bounds.width / 2, y: -bounds.height / 2 },
+    { x: bounds.width / 2, y: bounds.height / 2 },
+    { x: -bounds.width / 2, y: bounds.height / 2 }
+  ].map((point) => ({
+    x: cx + point.x * Math.cos(angle) - point.y * Math.sin(angle),
+    y: cy + point.x * Math.sin(angle) + point.y * Math.cos(angle)
+  }))
+
+  ctx.save()
+  ctx.strokeStyle = '#1fb6ff'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(corners[0].x, corners[0].y)
+  corners.slice(1).forEach((corner) => ctx.lineTo(corner.x, corner.y))
+  ctx.closePath()
+  ctx.stroke()
+
+  corners.forEach((corner) => {
+    ctx.fillStyle = '#ffffff'
+    ctx.strokeStyle = '#1fb6ff'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.rect(corner.x - 5, corner.y - 5, 10, 10)
+    ctx.fill()
+    ctx.stroke()
+  })
+
+  const rotateHandle = { x: cx, y: bounds.y - 28 }
+  ctx.beginPath()
+  ctx.moveTo(cx, bounds.y)
+  ctx.lineTo(rotateHandle.x, rotateHandle.y)
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(rotateHandle.x, rotateHandle.y, 7, 0, Math.PI * 2)
+  ctx.fillStyle = '#1fb6ff'
+  ctx.fill()
+
+  state.transform.guides.forEach((guide) => {
+    ctx.strokeStyle = 'rgba(31, 182, 255, 0.55)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    if (guide.axis === 'vertical') {
+      ctx.moveTo(guide.value, 0)
+      ctx.lineTo(guide.value, canvas.height)
+    } else {
+      ctx.moveTo(0, guide.value)
+      ctx.lineTo(canvas.width, guide.value)
+    }
+    ctx.stroke()
+  })
+  ctx.restore()
 }
 
 function renderCanvasForLayerIds(canvasId, layerIds) {
@@ -241,6 +520,10 @@ function renderCanvasForLayerIds(canvasId, layerIds) {
     .map((id) => getLayerById(id))
     .filter(Boolean)
     .forEach((layer) => drawLayer(ctx, layer, canvas))
+
+  if (canvasId === 'preview-canvas' && state.selectedLayerId && state.previewLayerId === state.selectedLayerId) {
+    drawTransformOverlay(canvasId, state.selectedLayerId)
+  }
 }
 
 function renderSwitcherMonitors() {
@@ -458,8 +741,46 @@ function renderPropertiesPanel() {
         <option value="false" ${!layer.visible ? 'selected' : ''}>Nao</option>
       </select>
 
-      <label>Opacidade</label>
+      <label>Opacidade <span id="prop-opacity-value" class="property-inline-value">${formatOpacity(layer.opacity)}</span></label>
       <input id="prop-opacity" type="range" min="0" max="1" step="0.05" value="${layer.opacity}" />
+
+      <div class="inline-grid double">
+        <div>
+          <label>Posição X</label>
+          <input id="prop-x" type="number" step="1" value="${Number(layer.x || 0)}" />
+        </div>
+        <div>
+          <label>Posição Y</label>
+          <input id="prop-y" type="number" step="1" value="${Number(layer.y || 0)}" />
+        </div>
+      </div>
+
+      <div class="inline-grid double">
+        <div>
+          <label>Largura</label>
+          <input id="prop-width" type="number" min="1" step="1" value="${layer.width ?? ''}" placeholder="auto" />
+        </div>
+        <div>
+          <label>Altura</label>
+          <input id="prop-height" type="number" min="1" step="1" value="${layer.height ?? ''}" placeholder="auto" />
+        </div>
+      </div>
+
+      <div class="inline-grid double">
+        <div>
+          <label>Rotação (graus)</label>
+          <input id="prop-rotation" type="number" step="1" value="${Number(layer.rotation || 0)}" />
+        </div>
+        <div>
+          <label>Escala proporcional</label>
+          <select id="prop-preserve-aspect">
+            <option value="true" ${layer.preserveAspect !== false ? 'selected' : ''}>Sim</option>
+            <option value="false" ${layer.preserveAspect === false ? 'selected' : ''}>Não</option>
+          </select>
+        </div>
+      </div>
+
+      <button id="prop-reset-transform" class="btn" type="button">Resetar posição e tamanho</button>
 
       ${layer.type === 'text' ? `
         <label>Texto</label>
@@ -487,6 +808,54 @@ function renderPropertiesPanel() {
 
   $('#prop-opacity').on('input', (event) => {
     layer.opacity = Number(event.target.value)
+    $('#prop-opacity-value').text(formatOpacity(layer.opacity))
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+  })
+
+  $('#prop-x').on('input', (event) => {
+    layer.x = Number(event.target.value || 0)
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+  })
+
+  $('#prop-y').on('input', (event) => {
+    layer.y = Number(event.target.value || 0)
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+  })
+
+  $('#prop-width').on('input', (event) => {
+    const value = String(event.target.value || '').trim()
+    layer.width = value ? Number(value) : null
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+  })
+
+  $('#prop-height').on('input', (event) => {
+    const value = String(event.target.value || '').trim()
+    layer.height = value ? Number(value) : null
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+  })
+
+  $('#prop-rotation').on('input', (event) => {
+    layer.rotation = Number(event.target.value || 0)
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+  })
+
+  $('#prop-preserve-aspect').on('change', (event) => {
+    layer.preserveAspect = event.target.value === 'true'
+  })
+
+  $('#prop-reset-transform').on('click', () => {
+    layer.x = 0
+    layer.y = 0
+    layer.width = null
+    layer.height = null
+    layer.rotation = 0
+    renderPropertiesPanel()
     renderSwitcherMonitors()
     notifyOutputLayers()
   })
@@ -630,20 +999,170 @@ function addTextInputLayer() {
   notifyOutputLayers()
 }
 
-function addBibleLayer() {
-  const ref = prompt('Referencia biblica (ex: Joao 3:16)', 'Joao 3:16')
-  if (!ref) return
-  const verse = prompt('Texto do versiculo', 'Porque Deus amou o mundo...')
+function upsertBibleLayer(verse) {
   if (!verse) return
 
-  const layer = createLayer('text', `Biblia ${state.nextLayerId}`, {
-    text: `${ref} - ${verse}`,
+  const text = `${verse.text}\n\n- ${verse.ref} (${state.bible.version})`
+  const existing = state.layers.find((layer) => layer.type === 'text' && layer.meta?.source === 'biblia')
+
+  if (existing) {
+    existing.name = `Biblia ${verse.ref}`
+    existing.text = text
+    existing.color = '#f4d35e'
+    existing.font = 'bold 38px Segoe UI'
+    existing.visible = true
+    cueLayer(existing.id)
+    renderPropertiesPanel()
+    renderSwitcherMonitors()
+    notifyOutputLayers()
+    renderToast(`Versículo carregado: ${verse.ref}`)
+    return
+  }
+
+  const layer = createLayer('text', `Biblia ${verse.ref}`, {
+    text,
     color: '#f4d35e',
-    font: 'bold 38px Segoe UI'
+    font: 'bold 38px Segoe UI',
+    meta: { source: 'biblia', ref: verse.ref }
   })
 
   addLayer(layer)
   notifyOutputLayers()
+  renderToast(`Versículo carregado: ${verse.ref}`)
+}
+
+function closeBibleModal() {
+  $('#bible-modal').remove()
+}
+
+function renderBibleResults() {
+  const host = $('#bible-results')
+  if (!host.length) return
+
+  if (!state.bible.results.length) {
+    host.html('<div class="empty-state compact">Nenhum versículo encontrado.</div>')
+    return
+  }
+
+  host.html(state.bible.results.map((verse, index) => `
+    <button class="result-card" data-verse-index="${index}">
+      <strong>${escapeHtml(verse.ref)}</strong>
+      <span>${escapeHtml(verse.text)}</span>
+    </button>
+  `).join(''))
+
+  host.find('[data-verse-index]').on('click', (event) => {
+    const idx = Number($(event.currentTarget).attr('data-verse-index'))
+    const verse = state.bible.results[idx]
+    upsertBibleLayer(verse)
+  })
+}
+
+async function searchBible(mode) {
+  if (!window.mediaLayers?.bibliaSearch) return
+
+  try {
+    let results = []
+    if (mode === 'reference') {
+      const book = $('#bible-book').val()
+      const chapter = Number($('#bible-chapter').val() || 1)
+      const verseStart = Number($('#bible-verse-start').val() || 1)
+      const verseEnd = Number($('#bible-verse-end').val() || verseStart)
+
+      results = await window.mediaLayers.bibliaSearch({
+        type: 'reference',
+        book,
+        chapter,
+        verseStart,
+        verseEnd,
+        version: state.bible.version
+      })
+    } else {
+      const query = String($('#bible-query').val() || '').trim()
+      if (!query) return
+
+      results = await window.mediaLayers.bibliaSearch({
+        type: 'text',
+        query,
+        version: state.bible.version
+      })
+    }
+
+    state.bible.results = Array.isArray(results) ? results : []
+    renderBibleResults()
+  } catch (error) {
+    reportRendererError('biblia-search', error, { mode })
+    renderToast(`Falha ao buscar versículos: ${error.message}`)
+  }
+}
+
+function openBibleModal() {
+  closeBibleModal()
+
+  $('body').append(`
+    <div id="bible-modal" class="modal-shell">
+      <div class="modal-card bible-modal-card">
+        <div class="modal-head">
+          <div>
+            <strong>Versículos</strong>
+            <p>Busque por referência ou trecho e envie para preview/program.</p>
+          </div>
+          <button id="bible-close" class="icon-btn" aria-label="Fechar">✕</button>
+        </div>
+        <div class="modal-grid">
+          <div class="modal-section">
+            <label>Versão</label>
+            <select id="bible-version">
+              <option value="NVI" ${state.bible.version === 'NVI' ? 'selected' : ''}>NVI</option>
+              <option value="ARA" ${state.bible.version === 'ARA' ? 'selected' : ''}>ARA</option>
+              <option value="ACF" ${state.bible.version === 'ACF' ? 'selected' : ''}>ACF</option>
+              <option value="NTLH" ${state.bible.version === 'NTLH' ? 'selected' : ''}>NTLH</option>
+            </select>
+            <label>Livro</label>
+            <select id="bible-book">
+              ${BIBLE_BOOKS.map((book) => `<option value="${book}">${book}</option>`).join('')}
+            </select>
+            <div class="inline-grid triple">
+              <div>
+                <label>Capítulo</label>
+                <input id="bible-chapter" type="number" min="1" value="3" />
+              </div>
+              <div>
+                <label>Verso inicial</label>
+                <input id="bible-verse-start" type="number" min="1" value="16" />
+              </div>
+              <div>
+                <label>Verso final</label>
+                <input id="bible-verse-end" type="number" min="1" value="16" />
+              </div>
+            </div>
+            <button id="bible-search-reference" class="btn">Buscar referência</button>
+          </div>
+          <div class="modal-section">
+            <label>Buscar por texto</label>
+            <input id="bible-query" type="text" placeholder="Porque Deus amou o mundo" />
+            <button id="bible-search-text" class="btn">Buscar trecho</button>
+            <div id="bible-results" class="result-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `)
+
+  $('#bible-close').on('click', closeBibleModal)
+  $('#bible-version').on('change', (event) => {
+    state.bible.version = event.target.value
+  })
+  $('#bible-search-reference').on('click', () => searchBible('reference'))
+  $('#bible-search-text').on('click', () => searchBible('text'))
+  $('#bible-query').on('keydown', (event) => {
+    if (event.key === 'Enter') searchBible('text')
+  })
+  renderBibleResults()
+}
+
+function addBibleLayer() {
+  openBibleModal()
 }
 
 function addBrowserSourceLayer() {
@@ -667,7 +1186,240 @@ function addFileFromPicker() {
   input.click()
 }
 
+function getCanvasPointerPosition(canvas, event) {
+  const rect = canvas.getBoundingClientRect()
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((event.clientY - rect.top) / rect.height) * canvas.height
+  }
+}
+
+function isPointInsideLayer(point, bounds) {
+  const angle = (-bounds.rotation * Math.PI) / 180
+  const cx = bounds.x + bounds.width / 2
+  const cy = bounds.y + bounds.height / 2
+  const dx = point.x - cx
+  const dy = point.y - cy
+  const localX = dx * Math.cos(angle) - dy * Math.sin(angle)
+  const localY = dx * Math.sin(angle) + dy * Math.cos(angle)
+
+  return Math.abs(localX) <= bounds.width / 2 && Math.abs(localY) <= bounds.height / 2
+}
+
+function getTransformHandle(point, bounds) {
+  const handles = {
+    nw: { x: bounds.x, y: bounds.y },
+    ne: { x: bounds.x + bounds.width, y: bounds.y },
+    se: { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+    sw: { x: bounds.x, y: bounds.y + bounds.height },
+    rotate: { x: bounds.x + bounds.width / 2, y: bounds.y - 28 }
+  }
+
+  for (const [name, handle] of Object.entries(handles)) {
+    if (Math.abs(point.x - handle.x) <= 10 && Math.abs(point.y - handle.y) <= 10) {
+      return name
+    }
+  }
+
+  if (isPointInsideLayer(point, bounds)) {
+    return 'move'
+  }
+
+  return null
+}
+
+function applyTransformFromPointer(pointer, canvas) {
+  const transform = state.transform
+  const layer = getLayerById(transform.layerId)
+  if (!layer || !transform.startPointer || !transform.startBounds) return
+
+  const dx = pointer.x - transform.startPointer.x
+  const dy = pointer.y - transform.startPointer.y
+  const start = { ...transform.startBounds }
+  let nextBounds = { ...start }
+
+  if (transform.mode === 'move') {
+    nextBounds.x = start.x + dx
+    nextBounds.y = start.y + dy
+  } else if (transform.mode === 'rotate') {
+    const centerX = start.x + start.width / 2
+    const centerY = start.y + start.height / 2
+    nextBounds.rotation = Math.round((Math.atan2(pointer.y - centerY, pointer.x - centerX) * 180) / Math.PI + 90)
+  } else {
+    const aspect = start.width / Math.max(1, start.height)
+    const signX = transform.mode.includes('w') ? -1 : 1
+    const signY = transform.mode.includes('n') ? -1 : 1
+
+    let width = clamp(start.width + dx * signX, 40, canvas.width * 2)
+    let height = clamp(start.height + dy * signY, 40, canvas.height * 2)
+
+    if (start.preserveAspect) {
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        height = width / aspect
+      } else {
+        width = height * aspect
+      }
+    }
+
+    nextBounds.width = width
+    nextBounds.height = height
+
+    if (transform.mode.includes('w')) {
+      nextBounds.x = start.x + (start.width - width)
+    }
+    if (transform.mode.includes('n')) {
+      nextBounds.y = start.y + (start.height - height)
+    }
+  }
+
+  if (transform.mode !== 'rotate') {
+    const snapped = snapBounds(nextBounds, canvas)
+    nextBounds = snapped.bounds
+    state.transform.guides = snapped.guides
+  }
+
+  layer.x = Math.round(nextBounds.x)
+  layer.y = Math.round(nextBounds.y)
+  layer.width = Math.round(nextBounds.width)
+  layer.height = Math.round(nextBounds.height)
+  layer.rotation = Math.round(nextBounds.rotation || 0)
+
+  renderPropertiesPanel()
+  renderSwitcherMonitors()
+  notifyOutputLayers()
+}
+
+function registerPreviewInteractions() {
+  const canvas = document.getElementById('preview-canvas')
+  if (!canvas || canvas.dataset.transformBound === 'true') return
+
+  canvas.dataset.transformBound = 'true'
+
+  canvas.addEventListener('pointerdown', (event) => {
+    const layer = getPreviewTransformLayer()
+    if (!layer) return
+
+    const pointer = getCanvasPointerPosition(canvas, event)
+    const bounds = getLayerBounds(layer, canvas)
+    const mode = getTransformHandle(pointer, bounds)
+    if (!mode) return
+
+    state.transform.active = true
+    state.transform.mode = mode
+    state.transform.layerId = layer.id
+    state.transform.startPointer = pointer
+    state.transform.startBounds = bounds
+    state.transform.guides = []
+    canvas.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  })
+
+  canvas.addEventListener('pointermove', (event) => {
+    const pointer = getCanvasPointerPosition(canvas, event)
+
+    if (!state.transform.active) {
+      const layer = getPreviewTransformLayer()
+      if (!layer) return
+      const bounds = getLayerBounds(layer, canvas)
+      const mode = getTransformHandle(pointer, bounds)
+      canvas.style.cursor = mode === 'move'
+        ? 'move'
+        : mode === 'rotate'
+          ? 'crosshair'
+          : mode
+            ? 'nwse-resize'
+            : 'default'
+      return
+    }
+
+    applyTransformFromPointer(pointer, canvas)
+  })
+
+  canvas.addEventListener('pointerup', () => {
+    state.transform.active = false
+    state.transform.mode = null
+    state.transform.layerId = null
+    state.transform.startPointer = null
+    state.transform.startBounds = null
+    state.transform.guides = []
+    renderSwitcherMonitors()
+  })
+}
+
+function closeMediaModal() {
+  $('#media-add-modal').remove()
+}
+
+function openMediaAddModal() {
+  closeMediaModal()
+
+  $('body').append(`
+    <div id="media-add-modal" class="modal-shell modal-shell-top">
+      <div class="modal-card media-add-card">
+        <div class="modal-head compact-head">
+          <div>
+            <strong>Adicionar mídia</strong>
+            <p>Escolha o tipo de fonte que será inserida na sessão.</p>
+          </div>
+          <button id="media-add-close" class="icon-btn" aria-label="Fechar">✕</button>
+        </div>
+        <div class="quick-media-grid">
+          <button class="quick-media-card" data-media-action="file">
+            <strong>Arquivo</strong>
+            <span>Imagem, vídeo ou áudio do disco.</span>
+          </button>
+          <button class="quick-media-card" data-media-action="text">
+            <strong>Texto</strong>
+            <span>Cria uma layer de texto editável.</span>
+          </button>
+          <button class="quick-media-card" data-media-action="bible">
+            <strong>Versículo</strong>
+            <span>Busca e envia versículos da Bíblia.</span>
+          </button>
+          <button class="quick-media-card" data-media-action="ndi">
+            <strong>Entrada NDI</strong>
+            <span>Conecta uma fonte NDI da rede.</span>
+          </button>
+          <button class="quick-media-card" data-media-action="browser">
+            <strong>Browser Source</strong>
+            <span>URL, página web ou fonte remota.</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  `)
+
+  $('#media-add-close').on('click', closeMediaModal)
+  $('[data-media-action]').on('click', async (event) => {
+    const action = $(event.currentTarget).attr('data-media-action')
+
+    if (action === 'file') addFileFromPicker()
+    if (action === 'text') addTextInputLayer()
+    if (action === 'bible') addBibleLayer()
+    if (action === 'ndi') await addNdiInputLayer()
+    if (action === 'browser') addBrowserSourceLayer()
+
+    closeMediaModal()
+  })
+}
+
+function closeToolbarMenus() {
+  $('.toolbar-menu').removeClass('is-open')
+}
+
+function bindToolbarMenuToggle(toggleSelector, menuSelector) {
+  $(toggleSelector).on('click', (event) => {
+    event.stopPropagation()
+    const menu = $(menuSelector)
+    const shouldOpen = !menu.hasClass('is-open')
+    closeToolbarMenus()
+    menu.toggleClass('is-open', shouldOpen)
+  })
+}
+
 function attachToolbarHandlers() {
+  $(document).off('click.toolbar-menu')
+
   $('#save-layout').on('click', () => {
     if (!state.goldenLayout) return
     try {
@@ -689,32 +1441,50 @@ function attachToolbarHandlers() {
 
   $('#start-ndi-output').on('click', startNdiOutput)
   $('#stop-ndi-output').on('click', stopNdiOutput)
-  $('#btn-add-file').on('click', addFileFromPicker)
-  $('#btn-add-text').on('click', addTextInputLayer)
-  $('#btn-add-ndi').on('click', addNdiInputLayer)
-  $('#btn-add-browser').on('click', addBrowserSourceLayer)
+  $('#open-media-modal').on('click', () => {
+    openMediaAddModal()
+    closeToolbarMenus()
+  })
   $('#btn-plugin-texto').on('click', () => togglePlugin('texto'))
   $('#btn-plugin-biblia').on('click', () => togglePlugin('biblia'))
-  $('#btn-plugin-text-action').on('click', addTextInputLayer)
-  $('#btn-plugin-biblia-action').on('click', addBibleLayer)
+  $('#btn-refresh-diagnostics').on('click', loadTelemetryState)
+
+  bindToolbarMenuToggle('#plugin-menu-toggle', '#plugin-menu')
+
+  $(document).on('click.toolbar-menu', () => closeToolbarMenus())
 }
 
 function renderToolbar() {
   $('#golden-layout-toolbar').html(`
-    <button id="save-layout" class="toolbar-btn">Salvar Layout</button>
-    <button id="restore-layout" class="toolbar-btn">Restaurar</button>
-    <button id="reset-layout" class="toolbar-btn danger">Reset</button>
-    <button id="btn-add-file" class="toolbar-btn">+ Midia</button>
-    <button id="btn-add-text" class="toolbar-btn">+ Texto</button>
-    <button id="btn-add-ndi" class="toolbar-btn">+ NDI</button>
-    <button id="btn-add-browser" class="toolbar-btn">+ Browser</button>
-    <button id="btn-plugin-texto" class="toolbar-btn">Plugin Texto: ON</button>
-    <button id="btn-plugin-biblia" class="toolbar-btn">Plugin Biblia: ON</button>
-    <button id="btn-plugin-text-action" class="toolbar-btn">Texto Plugin</button>
-    <button id="btn-plugin-biblia-action" class="toolbar-btn">Versiculo</button>
-    <button id="start-ndi-output" class="toolbar-btn success">Iniciar NDI Output</button>
-    <button id="stop-ndi-output" class="toolbar-btn warning">Parar NDI Output</button>
+    <div class="toolbar-group brand-group">
+      <div class="brand-mark">ML</div>
+      <div>
+        <strong class="brand-title">MediaLayers</strong>
+        <span class="brand-subtitle">Switcher em tempo real</span>
+      </div>
+    </div>
+    <div class="toolbar-group">
+      <button id="save-layout" class="toolbar-btn">Salvar</button>
+      <button id="restore-layout" class="toolbar-btn">Restaurar</button>
+      <button id="reset-layout" class="toolbar-btn danger">Reset</button>
+    </div>
+    <div class="toolbar-group">
+      <button id="open-media-modal" class="toolbar-btn">Adicionar mídia</button>
+    </div>
+    <div class="toolbar-group toolbar-menu-group">
+      <button id="plugin-menu-toggle" class="toolbar-btn">Plugins ▾</button>
+      <div id="plugin-menu" class="toolbar-menu">
+        <button id="btn-plugin-texto" class="toolbar-menu-item">Plugin Texto: ON</button>
+        <button id="btn-plugin-biblia" class="toolbar-menu-item">Plugin Bíblia: ON</button>
+        <button id="btn-refresh-diagnostics" class="toolbar-menu-item">Atualizar diagnóstico</button>
+      </div>
+    </div>
+    <div class="toolbar-group">
+      <button id="start-ndi-output" class="toolbar-btn success">NDI On</button>
+      <button id="stop-ndi-output" class="toolbar-btn warning">NDI Off</button>
+    </div>
     <span id="selected-layer-label" class="layer-label">Layer ativo: -</span>
+    <div id="app-toast-host" class="app-toast-host"></div>
   `)
 
   attachToolbarHandlers()
@@ -780,6 +1550,8 @@ function renderUpdatesPanel() {
   const downloadText = typeof status.downloadProgress === 'number'
     ? `${Math.round(status.downloadProgress)}%`
     : '-'
+  const canInstall = Boolean(status.downloaded)
+  const isChecking = Boolean(status.checking)
 
   panel.html(`
     <div class="panel-title">Atualizacoes</div>
@@ -798,8 +1570,8 @@ function renderUpdatesPanel() {
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button id="save-update-config" class="btn">Salvar</button>
-        <button id="check-updates-now" class="btn">Verificar agora</button>
-        <button id="install-update-now" class="btn">Instalar update</button>
+        <button id="check-updates-now" class="btn" ${isChecking ? 'disabled' : ''}>${isChecking ? 'Verificando...' : 'Verificar agora'}</button>
+        <button id="install-update-now" class="btn" ${canInstall ? '' : 'disabled'}>Instalar update</button>
       </div>
 
       <div class="clip-editor" style="min-height:auto;margin-top:10px;">
@@ -833,6 +1605,52 @@ function renderUpdatesPanel() {
     if (!window.mediaLayers?.appUpdateInstall) return
     await window.mediaLayers.appUpdateInstall()
   })
+}
+
+function renderDiagnosticsPanel() {
+  const panel = $('#diagnostics-panel')
+  if (!panel.length) return
+
+  const items = state.diagnostics.items || []
+  const content = items.length
+    ? items.slice(0, 12).map((item) => `
+        <div class="diagnostic-item diagnostic-${escapeHtml(item.level || 'info')}">
+          <div class="diagnostic-meta">
+            <strong>${escapeHtml(item.scope || 'app')}</strong>
+            <span>${escapeHtml(item.timestamp || '')}</span>
+          </div>
+          <div class="diagnostic-message">${escapeHtml(item.message || '')}</div>
+        </div>
+      `).join('')
+    : '<div class="empty-state compact">Nenhum erro capturado nesta sessão.</div>'
+
+  panel.html(`
+    <div class="panel-title">Diagnóstico e telemetria</div>
+    <div class="diagnostic-summary">
+      <span>Erros recentes: ${items.length}</span>
+      <span>Log: ${escapeHtml(state.diagnostics.logPath || 'indisponível')}</span>
+    </div>
+    <div class="diagnostic-list">${content}</div>
+  `)
+}
+
+async function loadTelemetryState() {
+  if (!window.mediaLayers?.telemetryGetState) return
+
+  try {
+    state.diagnostics = await window.mediaLayers.telemetryGetState()
+    renderDiagnosticsPanel()
+  } catch (error) {
+    reportRendererError('telemetry-load', error)
+  }
+
+  if (window.mediaLayers.onTelemetryUpdated && !loadTelemetryState.bound) {
+    loadTelemetryState.bound = true
+    window.mediaLayers.onTelemetryUpdated((snapshot) => {
+      state.diagnostics = snapshot
+      renderDiagnosticsPanel()
+    })
+  }
 }
 
 function togglePlugin(pluginKey) {
@@ -918,7 +1736,8 @@ function createDefaultLayoutConfig() {
                 content: [
                   { type: 'component', componentName: 'properties', title: 'Propriedades', isClosable: false },
                   { type: 'component', componentName: 'remote', title: 'Controle Remoto', isClosable: false },
-                  { type: 'component', componentName: 'updates', title: 'Atualizacoes', isClosable: false }
+                  { type: 'component', componentName: 'updates', title: 'Atualizacoes', isClosable: false },
+                  { type: 'component', componentName: 'diagnostics', title: 'Diagnóstico', isClosable: false }
                 ]
               }
             ]
@@ -986,6 +1805,7 @@ function registerGoldenComponents(goldenLayout) {
     })
 
     renderSwitcherMonitors()
+    registerPreviewInteractions()
   })
 
   goldenLayout.registerComponent('program', function(container) {
@@ -1026,6 +1846,16 @@ function registerGoldenComponents(goldenLayout) {
     `)
 
     renderUpdatesPanel()
+  })
+
+  goldenLayout.registerComponent('diagnostics', function(container) {
+    container.getElement().html(`
+      <div class="panel-content">
+        <div id="diagnostics-panel"></div>
+      </div>
+    `)
+
+    renderDiagnosticsPanel()
   })
 
   goldenLayout.registerComponent('clips', function(container) {
@@ -1240,6 +2070,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   registerRemoteCommands()
   await loadRemoteControlInfo()
   await loadUpdateConfig()
+  await loadTelemetryState()
   initGoldenLayout()
   startRenderLoop()
 
@@ -1252,6 +2083,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   notifyOutputLayers()
+})
+
+window.addEventListener('error', (event) => {
+  reportRendererError('controller-window', event.error || new Error(event.message), {
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno
+  })
+})
+
+window.addEventListener('unhandledrejection', (event) => {
+  reportRendererError('controller-window', event.reason instanceof Error ? event.reason : new Error(String(event.reason)))
 })
 
 window.addEventListener('beforeunload', async () => {

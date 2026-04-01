@@ -38,6 +38,7 @@ function checkFiles() {
     'src/output/index.html',
     'src/output/renderer.js',
     'src/ndi/ndi-manager.js',
+    'scripts/e2e-ui.js',
     'assets/icon.ico'
   ]
 
@@ -56,7 +57,8 @@ function checkSyntax() {
     'webrtc-server.js',
     'src/controller/app-daw.js',
     'src/output/renderer.js',
-    'src/ndi/ndi-manager.js'
+    'src/ndi/ndi-manager.js',
+    'scripts/e2e-ui.js'
   ]
 
   files.forEach((file) => {

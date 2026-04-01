@@ -30,6 +30,7 @@ let updateHandlersRegistered = false
 const GITHUB_RELEASES_BASE_URL = 'https://github.com/Alexandre-Gervasio/medialayers/releases'
 
 const UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'update-config.json')
+const TELEMETRY_LOG_PATH = path.join(app.getPath('userData'), 'telemetry-errors.log')
 const DEFAULT_UPDATE_CONFIG = {
   feedUrl: '',
   autoCheck: true
@@ -44,8 +45,73 @@ const updateState = {
   currentVersion: app.getVersion(),
   latestVersion: null,
   downloadProgress: null,
+  lastCheckedAt: null,
   feedUrl: '',
   isPackaged: app.isPackaged
+}
+const telemetryState = {
+  sessionStartedAt: new Date().toISOString(),
+  items: []
+}
+
+function recordTelemetry(level, scope, message, meta = {}) {
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    timestamp: new Date().toISOString(),
+    level,
+    scope,
+    message,
+    meta
+  }
+
+  telemetryState.items.unshift(entry)
+  telemetryState.items = telemetryState.items.slice(0, 100)
+
+  try {
+    fs.appendFileSync(TELEMETRY_LOG_PATH, `${JSON.stringify(entry)}\n`)
+  } catch (error) {
+    console.warn('[Telemetry] Falha ao gravar log:', error.message)
+  }
+
+  if (controllerWindow && !controllerWindow.isDestroyed()) {
+    controllerWindow.webContents.send('telemetry-updated', {
+      items: telemetryState.items,
+      logPath: TELEMETRY_LOG_PATH,
+      sessionStartedAt: telemetryState.sessionStartedAt
+    })
+  }
+}
+
+function getTelemetrySnapshot() {
+  return {
+    items: telemetryState.items,
+    logPath: TELEMETRY_LOG_PATH,
+    sessionStartedAt: telemetryState.sessionStartedAt
+  }
+}
+
+function isValidUpdateUrl(feedUrl) {
+  if (!feedUrl) return { ok: true }
+
+  try {
+    const parsed = new URL(feedUrl)
+    const isHttps = parsed.protocol === 'https:'
+    const isGithub = parsed.hostname === 'github.com'
+    const isLocalHttp = parsed.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(parsed.hostname)
+
+    if (isHttps || isGithub || (!app.isPackaged && isLocalHttp)) {
+      return { ok: true, normalized: feedUrl.replace(/\/+$/, '') }
+    }
+
+    return {
+      ok: false,
+      reason: app.isPackaged
+        ? 'Use uma URL HTTPS para atualizacoes em releases empacotadas.'
+        : 'Use HTTPS ou um host local de desenvolvimento para testar updates.'
+    }
+  } catch {
+    return { ok: false, reason: 'URL de atualizacao invalida.' }
+  }
 }
 
 function buildRemoteControlUrls(port) {
@@ -125,11 +191,13 @@ function configureAutoUpdater() {
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.allowPrerelease = false
 
   autoUpdater.on('checking-for-update', () => {
     updateUpdateState({
       checking: true,
       error: null,
+      lastCheckedAt: new Date().toISOString(),
       message: 'Verificando atualizacoes...'
     })
   })
@@ -173,6 +241,7 @@ function configureAutoUpdater() {
   })
 
   autoUpdater.on('error', (error) => {
+    recordTelemetry('error', 'updater', error.message, { stack: error.stack })
     updateUpdateState({
       checking: false,
       error: error.message,
@@ -184,8 +253,13 @@ function configureAutoUpdater() {
 }
 
 async function checkForAppUpdates() {
+  if (updateState.checking) {
+    return { ok: false, reason: 'already-checking' }
+  }
+
   const feedUrl = getConfiguredFeedUrl()
   const usingDefaultGithubFeed = !feedUrl
+  const validation = isValidUpdateUrl(feedUrl)
 
   updateUpdateState({
     configured: true,
@@ -200,6 +274,16 @@ async function checkForAppUpdates() {
       message: 'Auto-update desativado em desenvolvimento. Gere uma release empacotada para testar.'
     })
     return { ok: false, reason: 'not-packaged' }
+  }
+
+  if (!validation.ok) {
+    updateUpdateState({
+      checking: false,
+      configured: false,
+      error: validation.reason,
+      message: validation.reason
+    })
+    return { ok: false, reason: 'invalid-feed-url' }
   }
 
   if (usingDefaultGithubFeed) {
@@ -236,6 +320,17 @@ function createControllerWindow() {
     }
   })
   controllerWindow.loadFile(path.join(__dirname, 'src/controller/index-daw.html'))
+
+  controllerWindow.webContents.on('render-process-gone', (event, details) => {
+    recordTelemetry('error', 'controller', 'Renderer de controle encerrado inesperadamente.', details)
+  })
+
+  controllerWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    recordTelemetry('error', 'controller', 'Falha ao carregar interface de controle.', {
+      errorCode,
+      errorDescription
+    })
+  })
 }
 
 // ─────────────────────────────────────────────
@@ -264,6 +359,17 @@ function createOutputWindow(display) {
   win.loadFile(path.join(__dirname, 'src/output/index.html'))
   win.displayId = id
   outputWindows[id] = win
+
+  win.webContents.on('render-process-gone', (event, details) => {
+    recordTelemetry('error', 'output', `Renderer de saída do monitor ${id} encerrado inesperadamente.`, details)
+  })
+
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    recordTelemetry('error', 'output', `Falha ao carregar janela de saída ${id}.`, {
+      errorCode,
+      errorDescription
+    })
+  })
 
   // Quando a janela de saída fechar, remove do registro
   win.on('closed', () => {
@@ -410,6 +516,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+process.on('uncaughtException', (error) => {
+  recordTelemetry('fatal', 'main', error.message, { stack: error.stack })
+})
+
+process.on('unhandledRejection', (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  const stack = reason instanceof Error ? reason.stack : undefined
+  recordTelemetry('error', 'main', message, { stack })
+})
+
 // ─────────────────────────────────────────────
 // IPC — Comunicação entre janelas
 // ─────────────────────────────────────────────
@@ -464,13 +580,17 @@ ipcMain.handle('app-update-get-config', () => {
 ipcMain.handle('app-update-set-config', (event, config) => {
   const nextConfig = writeUpdateConfig(config || {})
   const feedUrl = getConfiguredFeedUrl()
+  const validation = isValidUpdateUrl(feedUrl)
 
   updateUpdateState({
-    configured: Boolean(feedUrl),
+    configured: Boolean(feedUrl) && validation.ok,
     feedUrl,
-    message: feedUrl
+    error: validation.ok ? null : validation.reason,
+    message: !feedUrl
+      ? 'URL de update vazia. Auto-update desativado.'
+      : validation.ok
       ? 'Configuracao de update salva.'
-      : 'URL de update vazia. Auto-update desativado.'
+      : validation.reason
   })
 
   return {
@@ -489,6 +609,16 @@ ipcMain.handle('app-update-install', async () => {
 
   setImmediate(() => autoUpdater.quitAndInstall())
   return { ok: true }
+})
+
+ipcMain.handle('telemetry-get-state', () => getTelemetrySnapshot())
+
+ipcMain.on('telemetry-report-error', (event, payload = {}) => {
+  recordTelemetry(payload.level || 'error', payload.scope || 'renderer', payload.message || 'Erro sem mensagem', {
+    stack: payload.stack,
+    extra: payload.extra,
+    sender: event.senderFrame?.url || 'unknown'
+  })
 })
 
 // Abre uma janela de saída para um display específico
@@ -911,6 +1041,11 @@ ipcMain.handle('biblia-search', async (event, { type, book, chapter, verseStart,
     console.warn('[Bíblia] Erro na API:', e.message)
   }
 
+  const fallbackResults = getBuiltinBibleFallback({ type, book, chapter, verseStart, verseEnd, query, version })
+  if (fallbackResults.length) {
+    return fallbackResults
+  }
+
   return []
 })
 
@@ -970,6 +1105,52 @@ function ptBookToAbbr(book) {
     '2 João': '2 john', '3 João': '3 john', 'Judas': 'jude', 'Apocalipse': 'revelation'
   }
   return map[book] || book.toLowerCase()
+}
+
+function getBuiltinBibleFallback({ type, book, chapter, verseStart, verseEnd, query, version }) {
+  const fallbackVerses = [
+    {
+      version: 'NVI',
+      book: 'João',
+      chapter: 3,
+      verse: 16,
+      text: 'Porque Deus tanto amou o mundo que deu o seu Filho Unigênito, para que todo o que nele crer não pereça, mas tenha a vida eterna.'
+    },
+    {
+      version: 'ARA',
+      book: 'João',
+      chapter: 3,
+      verse: 16,
+      text: 'Porque Deus amou ao mundo de tal maneira que deu o seu Filho unigênito, para que todo o que nele crê não pereça, mas tenha a vida eterna.'
+    },
+    {
+      version: 'NVI',
+      book: 'Salmos',
+      chapter: 23,
+      verse: 1,
+      text: 'O Senhor é o meu pastor; de nada terei falta.'
+    }
+  ]
+
+  if (type === 'reference') {
+    const upperVerseEnd = verseEnd || verseStart
+    return fallbackVerses
+      .filter((item) => item.version === (version || 'NVI'))
+      .filter((item) => item.book === book)
+      .filter((item) => item.chapter === Number(chapter))
+      .filter((item) => item.verse >= Number(verseStart) && item.verse <= Number(upperVerseEnd))
+      .map((item) => ({ ref: `${item.book} ${item.chapter}:${item.verse}`, text: item.text }))
+  }
+
+  if (type === 'text' && query) {
+    const normalizedQuery = String(query).toLowerCase()
+    return fallbackVerses
+      .filter((item) => item.version === (version || 'NVI'))
+      .filter((item) => item.text.toLowerCase().includes(normalizedQuery))
+      .map((item) => ({ ref: `${item.book} ${item.chapter}:${item.verse}`, text: item.text }))
+  }
+
+  return []
 }
 
 // Cleanup ao fechar

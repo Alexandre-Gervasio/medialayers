@@ -10,6 +10,17 @@ const activeElements = {}; // { layerId: wrapperElement }
 const cameraStreams = {}; // { layerId: MediaStream }
 const ndiCanvases = {}; // { layerId: canvas }
 
+function applyLayerPosition(wrapper, layer) {
+  const x = Number(layer?.x || 0)
+  const y = Number(layer?.y || 0)
+  const width = layer?.width ? `${Number(layer.width)}px` : '100%'
+  const height = layer?.height ? `${Number(layer.height)}px` : '100%'
+  const rotation = Number(layer?.rotation || 0)
+  wrapper.style.transform = `translate(${x}px, ${y}px) rotate(${rotation}deg)`
+  wrapper.style.width = width
+  wrapper.style.height = height
+}
+
 // ─────────────────────────────────────────────
 // BROADCAST CHANNEL — câmeras locais
 // ─────────────────────────────────────────────
@@ -45,6 +56,7 @@ async function openCameraInOutput(layerId, deviceId, opacity, visible) {
     }
     wrapper.innerHTML = '';
     wrapper.style.opacity = visible ? opacity : 0;
+    applyLayerPosition(wrapper, { x: 0, y: 0 });
     const video = document.createElement('video');
     video.srcObject = stream;
     video.autoplay = true;
@@ -112,6 +124,18 @@ let ndiOutputInterval = null;
 const ndiOutputCanvas = document.createElement('canvas');
 const ndiOutputCtx = ndiOutputCanvas.getContext('2d');
 
+function reportOutputError(scope, error, extra = {}) {
+  if (!window.mediaLayers?.telemetryReportError) return;
+
+  window.mediaLayers.telemetryReportError({
+    level: 'error',
+    scope,
+    message: error?.message || String(error),
+    stack: error?.stack,
+    extra
+  });
+}
+
 function startNDIOutputCapture() {
   if (ndiOutputInterval) return;
 
@@ -128,6 +152,7 @@ function startNDIOutputCapture() {
       })
     } catch (e) {
       console.error('[MediaLayers] Erro ao capturar/Enviar frame NDI:', e)
+      reportOutputError('output-ndi-capture', e)
     }
   }, 1000 / 15) // 15fps mais robusto
 }
@@ -137,6 +162,18 @@ function startNDIOutputCapture() {
 // ─────────────────────────────────────────────
 window.mediaLayers.outputReady();
 console.log('[MediaLayers] Janela de saída pronta (com NDI).');
+
+window.addEventListener('error', (event) => {
+  reportOutputError('output-window', event.error || new Error(event.message), {
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno
+  });
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  reportOutputError('output-window', event.reason instanceof Error ? event.reason : new Error(String(event.reason)));
+});
 
 // ─────────────────────────────────────────────
 // RECEBER COMANDOS DO PAINEL DE CONTROLE
@@ -176,6 +213,7 @@ function renderLayers(layers) {
       if (wrapper) {
         wrapper.style.opacity = layer.visible ? layer.opacity : 0;
         wrapper.style.zIndex = index + 1;
+        applyLayerPosition(wrapper, layer);
       }
       return;
     }
@@ -185,6 +223,7 @@ function renderLayers(layers) {
       if (wrapper) {
         wrapper.style.opacity = layer.visible ? layer.opacity : 0;
         wrapper.style.zIndex = index + 1;
+        applyLayerPosition(wrapper, layer);
       }
       return;
     }
@@ -198,6 +237,7 @@ function renderMediaLayer(layer, zIndex) {
     const wrapper = activeElements[layer.id];
     wrapper.style.opacity = layer.visible ? layer.opacity : 0;
     wrapper.style.zIndex = zIndex + 1;
+    applyLayerPosition(wrapper, layer);
     const video = wrapper.querySelector('video');
     if (video) { video.loop = layer.loop; video.volume = layer.volume ?? 1; }
     return;
@@ -208,6 +248,7 @@ function renderMediaLayer(layer, zIndex) {
   wrapper.dataset.id = layer.id;
   wrapper.style.zIndex = zIndex + 1;
   wrapper.style.opacity = layer.visible ? layer.opacity : 0;
+  applyLayerPosition(wrapper, layer);
 
   if (layer.type === 'video' && layer.src) {
     const video = document.createElement('video');
@@ -257,6 +298,11 @@ function renderTextLayer(layer) {
     font-family: 'Segoe UI', sans-serif;
     font-weight: 700;
     text-shadow: 2px 2px 8px rgba(0,0,0,0.8);
+    transform: translate(${Number(layer.x || 0)}px, ${Number(layer.y || 0)}px) rotate(${Number(layer.rotation || 0)}deg);
+    transform-origin: center center;
+    width: ${layer.width ? `${Number(layer.width)}px` : 'auto'};
+    max-width: ${layer.width ? `${Number(layer.width)}px` : '90%'};
+    min-height: ${layer.height ? `${Number(layer.height)}px` : 'auto'};
   `;
   layerText.appendChild(block);
 }

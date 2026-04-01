@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld('mediaLayers', {
   appUpdateInstall: ()          => ipcRenderer.invoke('app-update-install'),
   onAppUpdateStatus: (cb)       => ipcRenderer.on('app-update-status', (e, data) => cb(data)),
 
+  // ── Telemetria / Diagnostico ──────────────────────────────
+  telemetryGetState: ()         => ipcRenderer.invoke('telemetry-get-state'),
+  telemetryReportError: (data)  => ipcRenderer.send('telemetry-report-error', data),
+  onTelemetryUpdated: (cb)      => ipcRenderer.on('telemetry-updated', (e, data) => cb(data)),
+
   // ── NDI ──────────────────────────────────────────────────
   ndiAvailable:       ()        => ipcRenderer.invoke('ndi-available'),
   ndiFindSources:     ()        => ipcRenderer.invoke('ndi-find-sources'),
