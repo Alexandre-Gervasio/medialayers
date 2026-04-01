@@ -17,8 +17,8 @@
   "scripts": {
     "start": "electron .",
     "webrtc-server": "node webrtc-server.js",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win nsis",
+    "build": "electron-builder --publish never",
+    "build:win": "electron-builder --win nsis --publish never",
     "build:win:publish": "electron-builder --win nsis --publish always",
     "build:win:docker": "bash ./scripts/build-win-docker.sh",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
@@ -55,12 +55,6 @@
     "files": [
       "**/*",
       "!node_modules/.cache"
-    ],
-    "extraResources": [
-      {
-        "from": "resources/ffmpeg.exe",
-        "to": "ffmpeg.exe"
-      }
     ],
     "publish": {
       "provider": "github",
