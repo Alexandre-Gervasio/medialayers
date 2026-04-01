@@ -48,7 +48,8 @@ async function main() {
     cwd: projectRoot,
     env: {
       ...process.env,
-      MEDIALAYERS_UPDATE_URL: ''
+      MEDIALAYERS_UPDATE_URL: '',
+      MEDIALAYERS_DISABLE_CLOSE_PROMPT: '1'
     }
   })
 
@@ -75,8 +76,8 @@ async function main() {
     await page.waitForSelector('#program-canvas', { timeout: 15000 })
 
     await page.click('#open-media-modal')
-    await page.waitForSelector('#media-add-modal', { timeout: 5000 })
-    await page.click('[data-media-action="bible"]')
+    await page.waitForSelector('#global-media-overlay', { timeout: 5000 })
+    await page.click('[data-overlay-action="bible"]')
     await page.waitForSelector('#bible-modal', { timeout: 5000 })
     await page.selectOption('#bible-book', 'João')
     await page.fill('#bible-chapter', '3')
@@ -86,19 +87,22 @@ async function main() {
     await page.waitForSelector('#bible-results .result-card', { timeout: 15000 })
     await page.click('#bible-results .result-card')
     await page.waitForTimeout(250)
-    await page.click('#bible-close')
+
+    await page.waitForSelector('#global-media-overlay', { state: 'hidden', timeout: 10000 })
+    await page.click('[data-column-head="0"]')
+    await page.waitForTimeout(400)
 
     await page.click('#plugin-menu-toggle')
     await page.waitForSelector('#plugin-menu.is-open', { timeout: 5000 })
 
     const selectedLabel = await page.textContent('#selected-layer-label')
-    if (!selectedLabel || !selectedLabel.includes('Layer ativo')) {
+    if (!selectedLabel || !selectedLabel.includes('Layer ativa')) {
       throw new Error('Toolbar não exibiu a camada ativa')
     }
 
     const propName = await page.inputValue('#prop-name')
-    if (!propName || !propName.includes('Biblia')) {
-      throw new Error('Versículo não foi carregado na layer de propriedades')
+    if (!propName || !propName.includes('Bíblia')) {
+      throw new Error('Versículo não foi carregado no clip/layer atual')
     }
 
     await page.fill('#prop-x', '120')

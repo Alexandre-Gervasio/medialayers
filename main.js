@@ -3,7 +3,7 @@
 // NDI entrada e saída
 // ============================================================
 
-const { app, BrowserWindow, ipcMain, screen } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, screen } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -31,10 +31,13 @@ const GITHUB_RELEASES_BASE_URL = 'https://github.com/Alexandre-Gervasio/medialay
 
 const UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'update-config.json')
 const TELEMETRY_LOG_PATH = path.join(app.getPath('userData'), 'telemetry-errors.log')
+const SESSION_STATE_PATH = path.join(app.getPath('userData'), 'session-state.json')
 const DEFAULT_UPDATE_CONFIG = {
   feedUrl: '',
   autoCheck: true
 }
+let cachedSessionState = null
+let controllerCloseConfirmed = false
 const updateState = {
   configured: false,
   checking: false,
@@ -88,6 +91,67 @@ function getTelemetrySnapshot() {
     logPath: TELEMETRY_LOG_PATH,
     sessionStartedAt: telemetryState.sessionStartedAt
   }
+}
+
+function readSessionState() {
+  try {
+    if (!fs.existsSync(SESSION_STATE_PATH)) return null
+    const parsed = JSON.parse(fs.readFileSync(SESSION_STATE_PATH, 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch (error) {
+    console.warn('[Session] Falha ao ler sessao:', error.message)
+    return null
+  }
+}
+
+function writeSessionState(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return null
+
+  const payload = {
+    ...snapshot,
+    savedAt: new Date().toISOString()
+  }
+
+  fs.writeFileSync(SESSION_STATE_PATH, JSON.stringify(payload, null, 2))
+  cachedSessionState = payload
+  return payload
+}
+
+async function confirmControllerClose() {
+  if (!controllerWindow || controllerWindow.isDestroyed()) return true
+
+  if (process.env.MEDIALAYERS_DISABLE_CLOSE_PROMPT === '1') {
+    controllerCloseConfirmed = true
+    setImmediate(() => app.quit())
+    return true
+  }
+
+  const response = await dialog.showMessageBox(controllerWindow, {
+    type: 'question',
+    buttons: ['Salvar e sair', 'Sair sem salvar', 'Cancelar'],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+    message: 'Deseja salvar?',
+    detail: 'Mídias adicionadas, colunas, layers e o estado atual da aplicação serão preservados.'
+  })
+
+  if (response.response === 2) {
+    return false
+  }
+
+  if (response.response === 0) {
+    try {
+      writeSessionState(cachedSessionState || readSessionState() || { version: 1 })
+    } catch (error) {
+      dialog.showErrorBox('Falha ao salvar sessão', error.message)
+      return false
+    }
+  }
+
+  controllerCloseConfirmed = true
+  setImmediate(() => app.quit())
+  return true
 }
 
 function isValidUpdateUrl(feedUrl) {
@@ -320,6 +384,12 @@ function createControllerWindow() {
     }
   })
   controllerWindow.loadFile(path.join(__dirname, 'src/controller/index-daw.html'))
+
+  controllerWindow.on('close', async (event) => {
+    if (controllerCloseConfirmed) return
+    event.preventDefault()
+    await confirmControllerClose()
+  })
 
   controllerWindow.webContents.on('render-process-gone', (event, details) => {
     recordTelemetry('error', 'controller', 'Renderer de controle encerrado inesperadamente.', details)
@@ -612,6 +682,20 @@ ipcMain.handle('app-update-install', async () => {
 })
 
 ipcMain.handle('telemetry-get-state', () => getTelemetrySnapshot())
+
+ipcMain.handle('session-load-state', () => {
+  cachedSessionState = cachedSessionState || readSessionState()
+  return cachedSessionState
+})
+
+ipcMain.handle('session-save-state', (event, snapshot) => {
+  return writeSessionState(snapshot)
+})
+
+ipcMain.on('session-cache-state', (event, snapshot) => {
+  if (!snapshot || typeof snapshot !== 'object') return
+  cachedSessionState = snapshot
+})
 
 ipcMain.on('telemetry-report-error', (event, payload = {}) => {
   recordTelemetry(payload.level || 'error', payload.scope || 'renderer', payload.message || 'Erro sem mensagem', {
@@ -1155,6 +1239,7 @@ function getBuiltinBibleFallback({ type, book, chapter, verseStart, verseEnd, qu
 
 // Cleanup ao fechar
 app.on('before-quit', async () => {
+  controllerCloseConfirmed = true
   if (ndi) {
     await ndi.stopAllReceivers()
     await ndi.stopSender()

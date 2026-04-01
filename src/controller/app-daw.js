@@ -22,11 +22,22 @@ const BIBLE_BOOKS = [
 ]
 
 const LAYOUT_STORAGE_KEY = 'medialayers-golden-layout-v3'
+const SESSION_STORAGE_VERSION = 1
+const DEFAULT_MIXER_LAYER_COUNT = 3
+const DEFAULT_CLIP_COLUMN_COUNT = 8
+const SESSION_CACHE_DELAY = 180
 
 const state = {
   goldenLayout: null,
   layers: [],
   nextLayerId: 1,
+  mediaLibrary: [],
+  nextMediaId: 1,
+  mixerLayerIds: [],
+  clipColumns: [],
+  activeMixerRow: 0,
+  activeColumnIndex: 0,
+  liveColumnIndex: null,
   selectedLayerId: null,
   previewLayerId: null,
   programLayerIds: [],
@@ -66,6 +77,16 @@ const state = {
   bible: {
     version: 'NVI',
     results: []
+  },
+  mediaOverlay: {
+    targetRow: 0,
+    targetColumn: 0,
+    source: 'toolbar'
+  },
+  session: {
+    dirty: false,
+    cachedAt: null,
+    saveTimer: null
   }
 }
 
@@ -80,9 +101,11 @@ function createLayer(type, name, extra = {}) {
     visible: true,
     opacity: 1,
     src: null,
+    sourcePath: null,
     url: '',
     text: '',
     sourceIndex: 0,
+    mediaId: null,
     x: 0,
     y: 0,
     width: null,
@@ -91,20 +114,225 @@ function createLayer(type, name, extra = {}) {
     preserveAspect: true,
     frame: null,
     element: null,
+    meta: null,
     ...extra
   }
 }
 
-function initState() {
-  const textLayer = createLayer('text', 'Texto Inicial', {
-    text: 'MediaLayers pronto para apresentacao',
-    opacity: 0.8,
-    color: '#1fb6ff',
-    font: 'bold 44px Segoe UI'
+function createMixerLayer(rowIndex) {
+  return createLayer('empty', `Layer ${rowIndex + 1}`, {
+    visible: false,
+    meta: { fixedRow: true, rowIndex }
   })
-  state.layers.push(textLayer)
-  state.selectedLayerId = textLayer.id
-  state.previewLayerId = textLayer.id
+}
+
+function inferMediaKind(mimeType, name = '') {
+  const lowerName = String(name || '').toLowerCase()
+
+  if (String(mimeType || '').startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(lowerName)) return 'image'
+  if (String(mimeType || '').startsWith('video/') || /\.(mp4|mov|mkv|webm|avi)$/i.test(lowerName)) return 'video'
+  if (String(mimeType || '').startsWith('audio/') || /\.(mp3|wav|ogg|aac|flac)$/i.test(lowerName)) return 'audio'
+
+  return null
+}
+
+function sourcePathToFileUrl(sourcePath) {
+  if (!sourcePath) return null
+  if (String(sourcePath).startsWith('file://')) return sourcePath
+
+  const normalized = String(sourcePath).replace(/\\/g, '/')
+  const prefix = normalized.startsWith('/') ? 'file://' : 'file:///'
+  return encodeURI(`${prefix}${normalized}`)
+}
+
+function resolveMediaItemRuntimeSrc(item) {
+  if (!item) return null
+  if (item.sourcePath) return sourcePathToFileUrl(item.sourcePath)
+  if (item.runtimeSrc) return item.runtimeSrc
+  if (item.src && !String(item.src).startsWith('blob:')) return item.src
+  return null
+}
+
+function createDefaultClipColumns(columnCount = DEFAULT_CLIP_COLUMN_COUNT, rowCount = DEFAULT_MIXER_LAYER_COUNT) {
+  return Array.from({ length: columnCount }, (_, index) => ({
+    id: index + 1,
+    name: `Col ${index + 1}`,
+    clips: Array.from({ length: rowCount }, () => null)
+  }))
+}
+
+function normalizeClipColumns(clipColumns, rowCount = DEFAULT_MIXER_LAYER_COUNT) {
+  const baseColumns = Array.isArray(clipColumns) && clipColumns.length
+    ? clipColumns
+    : createDefaultClipColumns(DEFAULT_CLIP_COLUMN_COUNT, rowCount)
+
+  return baseColumns.map((column, index) => ({
+    id: Number(column?.id || index + 1),
+    name: column?.name || `Col ${index + 1}`,
+    clips: Array.from({ length: rowCount }, (_, rowIndex) => {
+      const clip = Array.isArray(column?.clips) ? column.clips[rowIndex] : null
+      return clip && typeof clip === 'object'
+        ? { mediaId: Number(clip.mediaId), label: clip.label || null }
+        : null
+    })
+  }))
+}
+
+function ensureMixerLayers(rowCount = DEFAULT_MIXER_LAYER_COUNT) {
+  const existing = state.layers
+    .filter((layer) => layer.meta?.fixedRow)
+    .sort((left, right) => Number(left.meta?.rowIndex || 0) - Number(right.meta?.rowIndex || 0))
+
+  state.mixerLayerIds = existing.map((layer) => layer.id)
+
+  while (state.mixerLayerIds.length < rowCount) {
+    const rowIndex = state.mixerLayerIds.length
+    const layer = createMixerLayer(rowIndex)
+    state.layers.push(layer)
+    state.mixerLayerIds.push(layer.id)
+  }
+}
+
+function ensureClipColumns() {
+  state.clipColumns = normalizeClipColumns(state.clipColumns, state.mixerLayerIds.length || DEFAULT_MIXER_LAYER_COUNT)
+}
+
+function getMixerLayerByRow(rowIndex) {
+  const layerId = state.mixerLayerIds[rowIndex]
+  return getLayerById(layerId)
+}
+
+function getMediaItemById(mediaId) {
+  return state.mediaLibrary.find((item) => item.id === Number(mediaId))
+}
+
+function sanitizeLayerForSession(layer) {
+  const { element, frame, ...serializable } = layer
+  return {
+    ...serializable,
+    src: serializable.sourcePath ? null : (serializable.src && !String(serializable.src).startsWith('blob:') ? serializable.src : null)
+  }
+}
+
+function sanitizeMediaItemForSession(item) {
+  const { runtimeSrc, ...serializable } = item
+  return serializable
+}
+
+function hydrateLayerFromSession(layerData) {
+  return {
+    ...layerData,
+    src: layerData?.sourcePath ? sourcePathToFileUrl(layerData.sourcePath) : (layerData?.src || null),
+    frame: null,
+    element: null,
+    preserveAspect: layerData?.preserveAspect !== false
+  }
+}
+
+function hydrateMediaItemFromSession(item) {
+  return {
+    ...item,
+    runtimeSrc: item?.sourcePath ? sourcePathToFileUrl(item.sourcePath) : null
+  }
+}
+
+function serializeSessionState() {
+  return {
+    version: SESSION_STORAGE_VERSION,
+    nextLayerId: state.nextLayerId,
+    nextMediaId: state.nextMediaId,
+    layers: state.layers.map(sanitizeLayerForSession),
+    mediaLibrary: state.mediaLibrary.map(sanitizeMediaItemForSession),
+    mixerLayerIds: [...state.mixerLayerIds],
+    clipColumns: normalizeClipColumns(state.clipColumns, state.mixerLayerIds.length || DEFAULT_MIXER_LAYER_COUNT),
+    activeMixerRow: state.activeMixerRow,
+    activeColumnIndex: state.activeColumnIndex,
+    liveColumnIndex: state.liveColumnIndex,
+    selectedLayerId: state.selectedLayerId,
+    previewLayerId: state.previewLayerId,
+    programLayerIds: [...state.programLayerIds],
+    plugins: { ...state.plugins },
+    updateConfig: { ...state.updateConfig, state: state.updateConfig.state || null },
+    bible: { ...state.bible }
+  }
+}
+
+function scheduleSessionCache() {
+  state.session.dirty = true
+
+  if (state.session.saveTimer) {
+    clearTimeout(state.session.saveTimer)
+  }
+
+  state.session.saveTimer = setTimeout(() => {
+    state.session.saveTimer = null
+    const snapshot = serializeSessionState()
+    state.session.cachedAt = new Date().toISOString()
+    if (window.mediaLayers?.sessionCacheState) {
+      window.mediaLayers.sessionCacheState(snapshot)
+    }
+  }, SESSION_CACHE_DELAY)
+}
+
+async function persistSessionNow(showToast = true) {
+  const snapshot = serializeSessionState()
+  if (window.mediaLayers?.sessionCacheState) {
+    window.mediaLayers.sessionCacheState(snapshot)
+  }
+  if (window.mediaLayers?.sessionSaveState) {
+    await window.mediaLayers.sessionSaveState(snapshot)
+  }
+  state.session.dirty = false
+  state.session.cachedAt = new Date().toISOString()
+  if (showToast) renderToast('Sessão salva')
+}
+
+function applySessionSnapshot(snapshot) {
+  state.layers = Array.isArray(snapshot?.layers) ? snapshot.layers.map(hydrateLayerFromSession) : []
+  state.nextLayerId = Number(snapshot?.nextLayerId || 1)
+  state.mediaLibrary = Array.isArray(snapshot?.mediaLibrary) ? snapshot.mediaLibrary.map(hydrateMediaItemFromSession) : []
+  state.nextMediaId = Number(snapshot?.nextMediaId || 1)
+  state.clipColumns = normalizeClipColumns(snapshot?.clipColumns, DEFAULT_MIXER_LAYER_COUNT)
+  state.activeMixerRow = clamp(Number(snapshot?.activeMixerRow || 0), 0, DEFAULT_MIXER_LAYER_COUNT - 1)
+  state.activeColumnIndex = Math.max(0, Number(snapshot?.activeColumnIndex || 0))
+  state.liveColumnIndex = typeof snapshot?.liveColumnIndex === 'number' ? snapshot.liveColumnIndex : null
+  state.selectedLayerId = snapshot?.selectedLayerId || null
+  state.previewLayerId = snapshot?.previewLayerId || null
+  state.programLayerIds = Array.isArray(snapshot?.programLayerIds) ? snapshot.programLayerIds.map(Number) : []
+  state.plugins = { ...state.plugins, ...(snapshot?.plugins || {}) }
+  state.bible = { ...state.bible, ...(snapshot?.bible || {}) }
+
+  ensureMixerLayers(DEFAULT_MIXER_LAYER_COUNT)
+  ensureClipColumns()
+
+  if (!state.selectedLayerId || !getLayerById(state.selectedLayerId)) {
+    state.selectedLayerId = state.mixerLayerIds[0] || null
+  }
+
+  if (!state.previewLayerId || !getLayerById(state.previewLayerId)) {
+    state.previewLayerId = state.selectedLayerId
+  }
+}
+
+function initState(snapshot = null) {
+  state.layers = []
+  state.nextLayerId = 1
+  state.mediaLibrary = []
+  state.nextMediaId = 1
+  state.mixerLayerIds = []
+  state.clipColumns = []
+  state.programLayerIds = []
+  state.liveColumnIndex = null
+
+  if (snapshot) {
+    applySessionSnapshot(snapshot)
+    return
+  }
+
+  ensureMixerLayers(DEFAULT_MIXER_LAYER_COUNT)
+  ensureClipColumns()
+  state.selectedLayerId = state.mixerLayerIds[0] || null
+  state.previewLayerId = state.selectedLayerId
 }
 
 function getLayerById(layerId) {
@@ -206,7 +434,8 @@ function getPreviewTransformLayer() {
 }
 
 function updateToolbarLabel() {
-  $('#selected-layer-label').text(`Layer ativo: ${state.selectedLayerId || '-'}`)
+  const rowLabel = typeof state.activeMixerRow === 'number' ? state.activeMixerRow + 1 : '-'
+  $('#selected-layer-label').text(`Layer ativa: ${rowLabel} • seleção ${state.selectedLayerId || '-'}`)
 }
 
 function formatOpacity(value) {
@@ -294,12 +523,399 @@ function notifyOutputLayers() {
   window.mediaLayers.sendToOutput({ type: 'update-layers', layers: programLayers })
 }
 
-function buildTimelineGrid() {
-  const cells = []
-  for (let i = 0; i < 16; i += 1) {
-    cells.push('<div class="cell"></div>')
+function getClipAt(rowIndex, columnIndex) {
+  return state.clipColumns[columnIndex]?.clips?.[rowIndex] || null
+}
+
+function getClipLabel(clip) {
+  if (!clip) return 'Adicionar mídia'
+  const mediaItem = getMediaItemById(clip.mediaId)
+  return mediaItem?.name || clip.label || 'Mídia indisponível'
+}
+
+function getClipTypeLabel(clip) {
+  if (!clip) return 'Clique para atribuir'
+  const mediaItem = getMediaItemById(clip.mediaId)
+  return mediaItem?.kind ? mediaItem.kind.toUpperCase() : 'SEM FONTE'
+}
+
+function selectMixerRow(rowIndex) {
+  state.activeMixerRow = clamp(Number(rowIndex || 0), 0, Math.max(0, state.mixerLayerIds.length - 1))
+  const rowLayer = getMixerLayerByRow(state.activeMixerRow)
+
+  if (rowLayer) {
+    state.selectedLayerId = rowLayer.id
+    state.previewLayerId = rowLayer.id
   }
-  return cells.join('')
+
+  renderLayerList()
+  renderPropertiesPanel()
+  renderTimelineOverview()
+  renderClipLauncher()
+  renderSwitcherMonitors()
+  scheduleSessionCache()
+}
+
+function setActiveClipCell(rowIndex, columnIndex) {
+  state.activeMixerRow = clamp(Number(rowIndex || 0), 0, Math.max(0, state.mixerLayerIds.length - 1))
+  state.activeColumnIndex = clamp(Number(columnIndex || 0), 0, Math.max(0, state.clipColumns.length - 1))
+  const rowLayer = getMixerLayerByRow(state.activeMixerRow)
+  if (rowLayer) {
+    state.selectedLayerId = rowLayer.id
+    state.previewLayerId = rowLayer.id
+  }
+  renderTimelineOverview()
+  renderClipLauncher()
+  renderLayerList()
+  renderPropertiesPanel()
+  scheduleSessionCache()
+}
+
+function createMediaItemFromFile(file) {
+  const kind = inferMediaKind(file?.type, file?.name)
+  if (!kind) return null
+
+  const sourcePath = file.path || null
+  return {
+    id: state.nextMediaId++,
+    kind,
+    name: file.name,
+    mimeType: file.type || '',
+    sourcePath,
+    runtimeSrc: sourcePath ? sourcePathToFileUrl(sourcePath) : URL.createObjectURL(file),
+    createdAt: new Date().toISOString()
+  }
+}
+
+function upsertMediaLibraryItem(item) {
+  if (!item) return null
+
+  const existing = item.sourcePath
+    ? state.mediaLibrary.find((entry) => entry.sourcePath === item.sourcePath)
+    : null
+
+  if (existing) return existing
+
+  state.mediaLibrary.push(item)
+  return item
+}
+
+function importFilesToLibrary(files) {
+  const addedItems = []
+
+  Array.from(files || []).forEach((file) => {
+    const item = createMediaItemFromFile(file)
+    const stored = upsertMediaLibraryItem(item)
+    if (stored) addedItems.push(stored)
+  })
+
+  if (!addedItems.length) return []
+
+  renderTimelineOverview()
+  renderClipLauncher()
+  renderLayerList()
+  scheduleSessionCache()
+  renderToast(`${addedItems.length} mídia(s) adicionada(s) à biblioteca`)
+  return addedItems
+}
+
+async function stopLayerReceiverIfNeeded(layer) {
+  if (!window.mediaLayers || !layer) return
+  if (state.ndiActiveReceivers[layer.id] === undefined) return
+
+  try {
+    await window.mediaLayers.ndiStopReceiver(layer.id)
+  } catch {}
+
+  delete state.ndiActiveReceivers[layer.id]
+  layer.frame = null
+}
+
+async function resetMixerLayer(rowIndex) {
+  const layer = getMixerLayerByRow(rowIndex)
+  if (!layer) return
+
+  await stopLayerReceiverIfNeeded(layer)
+  const cleanLayer = createMixerLayer(rowIndex)
+
+  Object.assign(layer, {
+    ...cleanLayer,
+    id: layer.id,
+    meta: cleanLayer.meta,
+    element: null,
+    frame: null
+  })
+}
+
+async function applyMediaItemToLayer(item, layer) {
+  if (!item || !layer) return false
+
+  await stopLayerReceiverIfNeeded(layer)
+
+  layer.name = item.name
+  layer.mediaId = item.id
+  layer.visible = true
+  layer.opacity = typeof layer.opacity === 'number' ? layer.opacity : 1
+  layer.sourcePath = item.sourcePath || null
+  layer.src = resolveMediaItemRuntimeSrc(item)
+  layer.url = ''
+  layer.text = ''
+  layer.loop = false
+  layer.frame = null
+  layer.element = null
+
+  if (item.kind === 'image' || item.kind === 'video' || item.kind === 'audio') {
+    layer.type = item.kind
+    layer.loop = item.kind !== 'image'
+    layer.element = createMediaElementForLayer(layer)
+    return true
+  }
+
+  if (item.kind === 'text') {
+    layer.type = 'text'
+    layer.text = item.text || item.name
+    layer.color = item.color || '#ffffff'
+    layer.font = item.font || 'bold 44px Segoe UI'
+    return true
+  }
+
+  if (item.kind === 'browser') {
+    layer.type = 'browser'
+    layer.url = item.url || ''
+    return true
+  }
+
+  if (item.kind === 'ndi') {
+    if (!window.mediaLayers?.ndiFindSources) return false
+
+    const sources = await window.mediaLayers.ndiFindSources()
+    const selectedIndex = sources.findIndex((source, index) => {
+      if (item.sourceName) return source.name === item.sourceName
+      return index === Number(item.sourceIndex || 0)
+    })
+
+    if (selectedIndex < 0) {
+      renderToast(`Fonte NDI indisponível: ${item.name}`)
+      return false
+    }
+
+    layer.type = 'ndi'
+    layer.sourceIndex = selectedIndex
+    layer.name = item.name || `NDI ${sources[selectedIndex].name || selectedIndex}`
+    await window.mediaLayers.ndiStartReceiver({ layerId: layer.id, sourceIndex: selectedIndex })
+    state.ndiActiveReceivers[layer.id] = selectedIndex
+    return true
+  }
+
+  return false
+}
+
+function assignMediaToSlot(mediaId, rowIndex, columnIndex) {
+  ensureClipColumns()
+  const mediaItem = getMediaItemById(mediaId)
+  const column = state.clipColumns[columnIndex]
+  if (!mediaItem || !column) return
+
+  column.clips[rowIndex] = {
+    mediaId: mediaItem.id,
+    label: mediaItem.name
+  }
+
+  setActiveClipCell(rowIndex, columnIndex)
+  renderTimelineOverview()
+  renderClipLauncher()
+  scheduleSessionCache()
+  renderToast(`${mediaItem.name} atribuída à coluna ${columnIndex + 1}, layer ${rowIndex + 1}`)
+}
+
+function clearClipSlot(rowIndex, columnIndex) {
+  const column = state.clipColumns[columnIndex]
+  if (!column) return
+
+  column.clips[rowIndex] = null
+  setActiveClipCell(rowIndex, columnIndex)
+  renderTimelineOverview()
+  renderClipLauncher()
+  scheduleSessionCache()
+}
+
+async function launchColumn(columnIndex) {
+  const column = state.clipColumns[columnIndex]
+  if (!column) return
+
+  const nextProgramLayerIds = []
+
+  for (let rowIndex = 0; rowIndex < state.mixerLayerIds.length; rowIndex += 1) {
+    const clip = column.clips[rowIndex]
+    const layer = getMixerLayerByRow(rowIndex)
+
+    if (!clip || !layer) {
+      await resetMixerLayer(rowIndex)
+      continue
+    }
+
+    const mediaItem = getMediaItemById(clip.mediaId)
+    const applied = await applyMediaItemToLayer(mediaItem, layer)
+    if (applied) {
+      nextProgramLayerIds.push(layer.id)
+    } else {
+      await resetMixerLayer(rowIndex)
+    }
+  }
+
+  state.liveColumnIndex = columnIndex
+  state.activeColumnIndex = columnIndex
+  state.programLayerIds = nextProgramLayerIds
+  const selectedLayer = getMixerLayerByRow(state.activeMixerRow)
+  state.selectedLayerId = selectedLayer?.id || nextProgramLayerIds[0] || state.mixerLayerIds[0] || null
+  state.previewLayerId = state.selectedLayerId
+
+  renderTimelineOverview()
+  renderClipLauncher()
+  renderLayerList()
+  renderPropertiesPanel()
+  renderSwitcherMonitors()
+  notifyOutputLayers()
+  scheduleSessionCache()
+}
+
+function renderTimelineOverview() {
+  const host = $('#timeline-panel')
+  if (!host.length) return
+
+  const buttons = state.clipColumns.map((column, index) => {
+    const hasContent = column.clips.some(Boolean)
+    const classes = [
+      'column-trigger-btn',
+      state.activeColumnIndex === index ? 'is-selected' : '',
+      state.liveColumnIndex === index ? 'is-live' : ''
+    ].filter(Boolean).join(' ')
+
+    return `
+      <button class="${classes}" data-column-trigger="${index}">
+        <strong>${escapeHtml(column.name)}</strong>
+        <span>${hasContent ? 'Disparar coluna' : 'Sem clips'}</span>
+      </button>
+    `
+  }).join('')
+
+  host.html(`
+    <div class="timeline-summary-bar">
+      <div>
+        <strong>Layer ativa:</strong> ${state.activeMixerRow + 1}
+      </div>
+      <div>
+        <strong>Coluna no ar:</strong> ${state.liveColumnIndex === null ? '-' : state.liveColumnIndex + 1}
+      </div>
+      <button id="timeline-open-library" class="btn">Biblioteca global</button>
+    </div>
+    <div class="timeline-columns-strip">${buttons}</div>
+  `)
+
+  host.find('[data-column-trigger]').on('click', async (event) => {
+    const index = Number($(event.currentTarget).attr('data-column-trigger'))
+    await launchColumn(index)
+  })
+
+  $('#timeline-open-library').on('click', () => {
+    openGlobalMediaOverlay({
+      rowIndex: state.activeMixerRow,
+      columnIndex: state.activeColumnIndex,
+      source: 'timeline'
+    })
+  })
+}
+
+function renderClipLauncher() {
+  const host = $('#clips-panel')
+  if (!host.length) return
+
+  const headerCells = state.clipColumns.map((column, index) => `
+    <button class="clip-column-head ${state.activeColumnIndex === index ? 'is-selected' : ''} ${state.liveColumnIndex === index ? 'is-live' : ''}" data-column-head="${index}">
+      ${escapeHtml(column.name)}
+    </button>
+  `).join('')
+
+  const rows = state.mixerLayerIds.map((layerId, rowIndex) => {
+    const rowCells = state.clipColumns.map((column, columnIndex) => {
+      const clip = getClipAt(rowIndex, columnIndex)
+      const selected = state.activeMixerRow === rowIndex && state.activeColumnIndex === columnIndex
+      const live = state.liveColumnIndex === columnIndex
+
+      return `
+        <div class="clip-slot ${selected ? 'is-selected' : ''} ${live ? 'is-live' : ''}" data-clip-slot="${rowIndex}:${columnIndex}">
+          <strong>${escapeHtml(getClipLabel(clip))}</strong>
+          <span>${escapeHtml(getClipTypeLabel(clip))}</span>
+          <div class="clip-slot-actions">
+            <button class="btn small" data-assign-slot="${rowIndex}:${columnIndex}">Biblioteca</button>
+            <button class="btn small" data-clear-slot="${rowIndex}:${columnIndex}" ${clip ? '' : 'disabled'}>Limpar</button>
+          </div>
+        </div>
+      `
+    }).join('')
+
+    return `
+      <div class="clip-layer-row" data-layer-row="${rowIndex}">
+        <button class="clip-layer-label ${state.activeMixerRow === rowIndex ? 'is-selected' : ''}" data-select-row="${rowIndex}">
+          Layer ${rowIndex + 1}
+        </button>
+        ${rowCells}
+      </div>
+    `
+  }).join('')
+
+  host.html(`
+    <div class="clip-launcher-shell">
+      <div class="clip-launcher-head">
+        <div>
+          <strong>Clips por coluna</strong>
+          <span>Selecione a layer, atribua mídias da biblioteca global e dispare a coluna inteira.</span>
+        </div>
+        <button id="clips-open-library" class="btn">Inserir mídia</button>
+      </div>
+      <div class="clip-grid-head">
+        <div class="clip-grid-corner">Layers</div>
+        ${headerCells}
+      </div>
+      <div class="clip-grid-body">${rows}</div>
+    </div>
+  `)
+
+  host.find('[data-select-row]').on('click', (event) => {
+    selectMixerRow(Number($(event.currentTarget).attr('data-select-row')))
+  })
+
+  host.find('[data-column-head]').on('click', async (event) => {
+    const columnIndex = Number($(event.currentTarget).attr('data-column-head'))
+    setActiveClipCell(state.activeMixerRow, columnIndex)
+    await launchColumn(columnIndex)
+  })
+
+  host.find('[data-clip-slot]').on('click', (event) => {
+    if ($(event.target).is('button')) return
+    const [rowIndex, columnIndex] = String($(event.currentTarget).attr('data-clip-slot')).split(':').map(Number)
+    setActiveClipCell(rowIndex, columnIndex)
+  })
+
+  host.find('[data-assign-slot]').on('click', (event) => {
+    event.stopPropagation()
+    const [rowIndex, columnIndex] = String($(event.currentTarget).attr('data-assign-slot')).split(':').map(Number)
+    openGlobalMediaOverlay({ rowIndex, columnIndex, source: 'clips' })
+  })
+
+  host.find('[data-clear-slot]').on('click', (event) => {
+    event.stopPropagation()
+    const [rowIndex, columnIndex] = String($(event.currentTarget).attr('data-clear-slot')).split(':').map(Number)
+    clearClipSlot(rowIndex, columnIndex)
+  })
+
+  $('#clips-open-library').on('click', () => {
+    openGlobalMediaOverlay({
+      rowIndex: state.activeMixerRow,
+      columnIndex: state.activeColumnIndex,
+      source: 'clips'
+    })
+  })
 }
 
 function createMediaElementForLayer(layer) {
@@ -601,6 +1217,7 @@ function addLayer(layer) {
   renderLayerList()
   renderPropertiesPanel()
   renderSwitcherMonitors()
+  scheduleSessionCache()
 }
 
 function removeLayer(layerId) {
@@ -608,6 +1225,7 @@ function removeLayer(layerId) {
   if (index === -1) return
 
   const layer = state.layers[index]
+  if (layer.meta?.fixedRow) return
   if (layer.src && layer.src.startsWith('blob:')) {
     URL.revokeObjectURL(layer.src)
   }
@@ -628,6 +1246,7 @@ function removeLayer(layerId) {
   renderPropertiesPanel()
   renderSwitcherMonitors()
   notifyOutputLayers()
+  scheduleSessionCache()
 }
 
 function cueLayer(layerId) {
@@ -636,6 +1255,7 @@ function cueLayer(layerId) {
   renderLayerList()
   renderPropertiesPanel()
   renderSwitcherMonitors()
+  scheduleSessionCache()
 }
 
 function takeLayer(layerId) {
@@ -645,6 +1265,7 @@ function takeLayer(layerId) {
   renderPropertiesPanel()
   renderSwitcherMonitors()
   notifyOutputLayers()
+  scheduleSessionCache()
 }
 
 function toggleLayerOnProgram(layerId) {
@@ -657,6 +1278,7 @@ function toggleLayerOnProgram(layerId) {
   renderLayerList()
   renderSwitcherMonitors()
   notifyOutputLayers()
+  scheduleSessionCache()
 }
 
 function renderLayerList() {
@@ -666,21 +1288,23 @@ function renderLayerList() {
   list.empty()
 
   state.layers.forEach((layer) => {
+    const isFixedRow = Boolean(layer.meta?.fixedRow)
+    const rowLabel = isFixedRow ? `Layer ${Number(layer.meta?.rowIndex || 0) + 1}` : `Layer ${layer.id}`
     const inProgram = state.programLayerIds.includes(layer.id)
     const isPreview = state.previewLayerId === layer.id
     const item = $(`
       <li class="layer-item ${layer.id === state.selectedLayerId ? 'selected' : ''}" data-layer-id="${layer.id}">
         <div class="layer-row">
-          <strong>${layer.id} - ${layer.name}</strong>
+          <strong>${escapeHtml(rowLabel)} - ${escapeHtml(layer.name)}</strong>
           <span style="font-size:11px;color:#9fb3cc;">${layer.type}</span>
         </div>
         <div class="layer-row" style="margin-top:8px;">
-          <span style="font-size:11px;color:#9fb3cc;">${inProgram ? 'ON AIR' : isPreview ? 'PREVIEW' : 'IDLE'}</span>
+          <span style="font-size:11px;color:#9fb3cc;">${inProgram ? 'ON AIR' : isPreview ? 'PREVIEW' : 'IDLE'}${isFixedRow ? ' • BASE' : ''}</span>
           <div class="layer-actions">
             <button class="btn small" data-action="cue">Cue</button>
             <button class="btn small" data-action="take">Take</button>
             <button class="btn small" data-action="toggle">Prog</button>
-            <button class="btn small" data-action="remove">X</button>
+            <button class="btn small" data-action="remove" ${isFixedRow ? 'disabled' : ''}>X</button>
           </div>
         </div>
       </li>
@@ -711,6 +1335,7 @@ function renderLayerList() {
 
     item.find('[data-action="remove"]').on('click', (event) => {
       event.stopPropagation()
+      if (isFixedRow) return
       removeLayer(layer.id)
     })
 
@@ -875,39 +1500,14 @@ function renderPropertiesPanel() {
       notifyOutputLayers()
     })
   }
-}
 
-function fileToLayer(file) {
-  const blobUrl = URL.createObjectURL(file)
-  if (file.type.startsWith('image/')) {
-    return createLayer('image', file.name, { src: blobUrl })
-  }
-
-  if (file.type.startsWith('video/')) {
-    return createLayer('video', file.name, { src: blobUrl, loop: true })
-  }
-
-  if (file.type.startsWith('audio/')) {
-    return createLayer('audio', file.name, { src: blobUrl, loop: true, volume: 1 })
-  }
-
-  return null
+  panel.find('input, select, textarea').on('input.session-cache change.session-cache', () => {
+    scheduleSessionCache()
+  })
 }
 
 function handleDroppedFiles(files) {
-  const newLayers = []
-  Array.from(files).forEach((file) => {
-    const layer = fileToLayer(file)
-    if (layer) {
-      layer.element = createMediaElementForLayer(layer)
-      newLayers.push(layer)
-    }
-  })
-
-  newLayers.forEach((layer) => addLayer(layer))
-  if (newLayers.length) {
-    notifyOutputLayers()
-  }
+  importFilesToLibrary(files)
 }
 
 function registerDragAndDrop() {
@@ -970,64 +1570,68 @@ async function addNdiInputLayer() {
       return
     }
 
-    const layer = createLayer('ndi', `NDI ${state.ndiSources[sourceIndex].name || sourceIndex}`, {
-      sourceIndex
+    const item = upsertMediaLibraryItem({
+      id: state.nextMediaId++,
+      kind: 'ndi',
+      name: `NDI ${state.ndiSources[sourceIndex].name || sourceIndex}`,
+      sourceIndex,
+      sourceName: state.ndiSources[sourceIndex].name || '',
+      createdAt: new Date().toISOString()
     })
 
-    addLayer(layer)
-
-    await window.mediaLayers.ndiStartReceiver({ layerId: layer.id, sourceIndex })
-    state.ndiActiveReceivers[layer.id] = sourceIndex
-
-    if (!state.programLayerIds.length) {
-      state.programLayerIds = [layer.id]
-    }
-
-    notifyOutputLayers()
+    assignMediaToSlot(item.id, state.mediaOverlay.targetRow, state.mediaOverlay.targetColumn)
+    renderGlobalMediaOverlayLibrary()
+    scheduleSessionCache()
+    closeGlobalMediaOverlay()
   } catch (error) {
     console.error('[DAW] Falha ao adicionar NDI', error)
   }
 }
 
 function addTextInputLayer() {
-  const layer = createLayer('text', `Texto ${state.nextLayerId}`, {
-    text: 'Novo texto',
+  const suggestedName = `Texto ${state.nextMediaId}`
+  const name = prompt('Nome do clip de texto', suggestedName)
+  if (name === null) return
+
+  const text = prompt('Conteúdo do texto', 'Novo texto')
+  if (text === null) return
+
+  const item = upsertMediaLibraryItem({
+    id: state.nextMediaId++,
+    kind: 'text',
+    name: name.trim() || suggestedName,
+    text,
     color: '#ffffff',
-    font: 'bold 44px Segoe UI'
+    font: 'bold 44px Segoe UI',
+    createdAt: new Date().toISOString()
   })
-  addLayer(layer)
-  notifyOutputLayers()
+
+  assignMediaToSlot(item.id, state.mediaOverlay.targetRow, state.mediaOverlay.targetColumn)
+  renderGlobalMediaOverlayLibrary()
+  scheduleSessionCache()
+  closeGlobalMediaOverlay()
 }
 
 function upsertBibleLayer(verse) {
   if (!verse) return
 
   const text = `${verse.text}\n\n- ${verse.ref} (${state.bible.version})`
-  const existing = state.layers.find((layer) => layer.type === 'text' && layer.meta?.source === 'biblia')
-
-  if (existing) {
-    existing.name = `Biblia ${verse.ref}`
-    existing.text = text
-    existing.color = '#f4d35e'
-    existing.font = 'bold 38px Segoe UI'
-    existing.visible = true
-    cueLayer(existing.id)
-    renderPropertiesPanel()
-    renderSwitcherMonitors()
-    notifyOutputLayers()
-    renderToast(`Versículo carregado: ${verse.ref}`)
-    return
-  }
-
-  const layer = createLayer('text', `Biblia ${verse.ref}`, {
+  const item = upsertMediaLibraryItem({
+    id: state.nextMediaId++,
+    kind: 'text',
+    name: `Bíblia ${verse.ref}`,
     text,
     color: '#f4d35e',
     font: 'bold 38px Segoe UI',
-    meta: { source: 'biblia', ref: verse.ref }
+    createdAt: new Date().toISOString(),
+    meta: { source: 'biblia', ref: verse.ref, version: state.bible.version }
   })
 
-  addLayer(layer)
-  notifyOutputLayers()
+  assignMediaToSlot(item.id, state.mediaOverlay.targetRow, state.mediaOverlay.targetColumn)
+  renderGlobalMediaOverlayLibrary()
+  closeBibleModal()
+  closeGlobalMediaOverlay()
+  scheduleSessionCache()
   renderToast(`Versículo carregado: ${verse.ref}`)
 }
 
@@ -1168,19 +1772,29 @@ function addBibleLayer() {
 function addBrowserSourceLayer() {
   const url = prompt('URL da Browser Source (https://...)', 'https://example.com')
   if (!url) return
-  const layer = createLayer('browser', `Browser ${state.nextLayerId}`, { url })
-  addLayer(layer)
-  notifyOutputLayers()
+  const item = upsertMediaLibraryItem({
+    id: state.nextMediaId++,
+    kind: 'browser',
+    name: `Browser ${state.nextMediaId - 1}`,
+    url,
+    createdAt: new Date().toISOString()
+  })
+
+  assignMediaToSlot(item.id, state.mediaOverlay.targetRow, state.mediaOverlay.targetColumn)
+  renderGlobalMediaOverlayLibrary()
+  scheduleSessionCache()
+  closeGlobalMediaOverlay()
 }
 
 function addFileFromPicker() {
   const input = document.createElement('input')
   input.type = 'file'
+  input.multiple = true
   input.accept = 'image/*,video/*,audio/*'
   input.onchange = (event) => {
     const files = event.target.files
     if (files && files.length) {
-      handleDroppedFiles(files)
+      importFilesToLibrary(files)
     }
   }
   input.click()
@@ -1346,60 +1960,119 @@ function registerPreviewInteractions() {
   })
 }
 
-function closeMediaModal() {
-  $('#media-add-modal').remove()
+function closeGlobalMediaOverlay() {
+  $('#global-media-overlay').remove()
 }
 
-function openMediaAddModal() {
-  closeMediaModal()
+function renderGlobalMediaOverlayLibrary() {
+  const host = $('#global-media-library-grid')
+  if (!host.length) return
+
+  if (!state.mediaLibrary.length) {
+    host.html('<div class="empty-state compact">A biblioteca global ainda está vazia. Importe arquivos ou crie uma fonte a partir das ações acima.</div>')
+    return
+  }
+
+  host.html(state.mediaLibrary.map((item) => `
+    <button class="global-media-card" data-library-item="${item.id}">
+      <strong>${escapeHtml(item.name)}</strong>
+      <span>${escapeHtml(String(item.kind || '').toUpperCase())}</span>
+      <small>${escapeHtml(item.sourcePath || item.url || item.text || 'Biblioteca global')}</small>
+    </button>
+  `).join(''))
+
+  host.find('[data-library-item]').on('click', (event) => {
+    const mediaId = Number($(event.currentTarget).attr('data-library-item'))
+    assignMediaToSlot(mediaId, state.mediaOverlay.targetRow, state.mediaOverlay.targetColumn)
+    closeGlobalMediaOverlay()
+  })
+}
+
+function openGlobalMediaOverlay(options = {}) {
+  state.mediaOverlay.targetRow = clamp(Number(options.rowIndex ?? state.activeMixerRow), 0, Math.max(0, state.mixerLayerIds.length - 1))
+  state.mediaOverlay.targetColumn = clamp(Number(options.columnIndex ?? state.activeColumnIndex), 0, Math.max(0, state.clipColumns.length - 1))
+  state.mediaOverlay.source = options.source || 'toolbar'
+
+  setActiveClipCell(state.mediaOverlay.targetRow, state.mediaOverlay.targetColumn)
+  closeGlobalMediaOverlay()
 
   $('body').append(`
-    <div id="media-add-modal" class="modal-shell modal-shell-top">
-      <div class="modal-card media-add-card">
-        <div class="modal-head compact-head">
+    <div id="global-media-overlay" class="global-media-overlay" role="dialog" aria-modal="true">
+      <div class="global-media-panel">
+        <div class="global-media-head">
           <div>
-            <strong>Adicionar mídia</strong>
-            <p>Escolha o tipo de fonte que será inserida na sessão.</p>
+            <strong>Biblioteca global de mídias</strong>
+            <p>Overlay único para importar, reutilizar e atribuir clips às colunas. Destino atual: layer ${state.mediaOverlay.targetRow + 1}, coluna ${state.mediaOverlay.targetColumn + 1}.</p>
           </div>
-          <button id="media-add-close" class="icon-btn" aria-label="Fechar">✕</button>
+          <button id="global-media-close" class="icon-btn" aria-label="Fechar">✕</button>
         </div>
-        <div class="quick-media-grid">
-          <button class="quick-media-card" data-media-action="file">
-            <strong>Arquivo</strong>
-            <span>Imagem, vídeo ou áudio do disco.</span>
-          </button>
-          <button class="quick-media-card" data-media-action="text">
-            <strong>Texto</strong>
-            <span>Cria uma layer de texto editável.</span>
-          </button>
-          <button class="quick-media-card" data-media-action="bible">
-            <strong>Versículo</strong>
-            <span>Busca e envia versículos da Bíblia.</span>
-          </button>
-          <button class="quick-media-card" data-media-action="ndi">
-            <strong>Entrada NDI</strong>
-            <span>Conecta uma fonte NDI da rede.</span>
-          </button>
-          <button class="quick-media-card" data-media-action="browser">
-            <strong>Browser Source</strong>
-            <span>URL, página web ou fonte remota.</span>
-          </button>
+        <div class="global-media-layout">
+          <aside class="global-media-sidebar">
+            <button class="quick-media-card" data-overlay-action="file">
+              <strong>Importar arquivos</strong>
+              <span>Imagem, vídeo ou áudio entram na biblioteca persistente.</span>
+            </button>
+            <button class="quick-media-card" data-overlay-action="text">
+              <strong>Texto</strong>
+              <span>Cria um clip de texto reutilizável para a célula selecionada.</span>
+            </button>
+            <button class="quick-media-card" data-overlay-action="bible">
+              <strong>Versículo</strong>
+              <span>Busca um versículo e adiciona como clip reutilizável.</span>
+            </button>
+            <button class="quick-media-card" data-overlay-action="ndi">
+              <strong>Entrada NDI</strong>
+              <span>Salva uma fonte NDI na biblioteca para disparo por coluna.</span>
+            </button>
+            <button class="quick-media-card" data-overlay-action="browser">
+              <strong>Browser Source</strong>
+              <span>Adiciona uma URL persistente à biblioteca global.</span>
+            </button>
+          </aside>
+          <section class="global-media-content">
+            <div class="global-media-content-head">
+              <strong>Lista única de mídias</strong>
+              <span>${state.mediaLibrary.length} item(ns) disponível(is)</span>
+            </div>
+            <div id="global-media-library-grid" class="global-media-library-grid"></div>
+          </section>
         </div>
       </div>
     </div>
   `)
 
-  $('#media-add-close').on('click', closeMediaModal)
-  $('[data-media-action]').on('click', async (event) => {
-    const action = $(event.currentTarget).attr('data-media-action')
+  $('#global-media-close').on('click', closeGlobalMediaOverlay)
+  $('#global-media-overlay').on('click', (event) => {
+    if (event.target.id === 'global-media-overlay') {
+      closeGlobalMediaOverlay()
+    }
+  })
+
+  $('[data-overlay-action]').on('click', async (event) => {
+    const action = $(event.currentTarget).attr('data-overlay-action')
 
     if (action === 'file') addFileFromPicker()
     if (action === 'text') addTextInputLayer()
-    if (action === 'bible') addBibleLayer()
+    if (action === 'bible') {
+      closeGlobalMediaOverlay()
+      addBibleLayer()
+    }
     if (action === 'ndi') await addNdiInputLayer()
     if (action === 'browser') addBrowserSourceLayer()
+  })
 
-    closeMediaModal()
+  renderGlobalMediaOverlayLibrary()
+}
+
+function closeMediaModal() {
+  closeGlobalMediaOverlay()
+}
+
+function openMediaAddModal() {
+  openGlobalMediaOverlay({
+    rowIndex: state.activeMixerRow,
+    columnIndex: state.activeColumnIndex,
+    source: 'toolbar'
   })
 }
 
@@ -1421,12 +2094,17 @@ function attachToolbarHandlers() {
   $(document).off('click.toolbar-menu')
 
   $('#save-layout').on('click', () => {
-    if (!state.goldenLayout) return
-    try {
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state.goldenLayout.toConfig()))
-    } catch (error) {
-      console.warn('[DAW] Nao foi possivel salvar layout', error)
+    if (state.goldenLayout) {
+      try {
+        localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(state.goldenLayout.toConfig()))
+      } catch (error) {
+        console.warn('[DAW] Nao foi possivel salvar layout', error)
+      }
     }
+
+    persistSessionNow().catch((error) => {
+      console.warn('[DAW] Nao foi possivel salvar sessao', error)
+    })
   })
 
   $('#restore-layout').on('click', () => {
@@ -1464,7 +2142,7 @@ function renderToolbar() {
       </div>
     </div>
     <div class="toolbar-group">
-      <button id="save-layout" class="toolbar-btn">Salvar</button>
+      <button id="save-layout" class="toolbar-btn">Salvar sessão</button>
       <button id="restore-layout" class="toolbar-btn">Restaurar</button>
       <button id="reset-layout" class="toolbar-btn danger">Reset</button>
     </div>
@@ -1753,17 +2431,19 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('timeline', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Timeline / Grid</div>
-        <div class="timeline-grid">${buildTimelineGrid()}</div>
+        <div class="panel-title">Colunas</div>
+        <div id="timeline-panel" class="timeline-panel"></div>
       </div>
     `)
+
+    renderTimelineOverview()
   })
 
   goldenLayout.registerComponent('inputs', function(container) {
     container.getElement().html(`
       <div class="panel-content">
         <div class="panel-title">Entradas</div>
-        <div id="drop-zone" class="drop-zone">Arraste e solte arquivos de video, audio ou imagem aqui</div>
+        <div id="drop-zone" class="drop-zone">Arraste arquivos aqui para alimentar a biblioteca global persistente</div>
         <ul id="layer-list" class="layer-list"></ul>
       </div>
     `)
@@ -1861,12 +2541,12 @@ function registerGoldenComponents(goldenLayout) {
   goldenLayout.registerComponent('clips', function(container) {
     container.getElement().html(`
       <div class="panel-content">
-        <div class="panel-title">Clip Editor</div>
-        <div class="clip-editor">
-          <p style="color:#9fb3cc;font-size:12px;">Area de clipes pronta para timeline e automacoes.</p>
-        </div>
+        <div class="panel-title">Clips / Layers</div>
+        <div id="clips-panel" class="clip-editor clip-launcher-panel"></div>
       </div>
     `)
+
+    renderClipLauncher()
   })
 }
 
@@ -1981,7 +2661,13 @@ function registerRemoteCommands() {
 
     if (command.type === 'clear') {
       state.programLayerIds = []
+      state.liveColumnIndex = null
+      renderTimelineOverview()
+      renderClipLauncher()
+      renderLayerList()
+      renderSwitcherMonitors()
       notifyOutputLayers()
+      scheduleSessionCache()
       return
     }
 
@@ -2063,7 +2749,16 @@ function escapeHtml(value) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  initState()
+  let savedSession = null
+  if (window.mediaLayers?.sessionLoadState) {
+    try {
+      savedSession = await window.mediaLayers.sessionLoadState()
+    } catch (error) {
+      console.warn('[DAW] Falha ao carregar sessão salva', error)
+    }
+  }
+
+  initState(savedSession)
   setupBuiltinPlugins()
   exposeLegacyGlobals()
   registerNdiFrameHandler()
@@ -2083,6 +2778,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   notifyOutputLayers()
+  scheduleSessionCache()
 })
 
 window.addEventListener('error', (event) => {
@@ -2098,6 +2794,15 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 window.addEventListener('beforeunload', async () => {
+  if (state.session.saveTimer) {
+    clearTimeout(state.session.saveTimer)
+    state.session.saveTimer = null
+  }
+
+  if (window.mediaLayers?.sessionCacheState) {
+    window.mediaLayers.sessionCacheState(serializeSessionState())
+  }
+
   stopRenderLoop()
   stopNdiOutputLoop()
 

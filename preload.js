@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('mediaLayers', {
   telemetryReportError: (data)  => ipcRenderer.send('telemetry-report-error', data),
   onTelemetryUpdated: (cb)      => ipcRenderer.on('telemetry-updated', (e, data) => cb(data)),
 
+  // ── Sessão / Persistência ─────────────────────────────────
+  sessionLoadState: ()          => ipcRenderer.invoke('session-load-state'),
+  sessionSaveState: (snapshot)  => ipcRenderer.invoke('session-save-state', snapshot),
+  sessionCacheState: (snapshot) => ipcRenderer.send('session-cache-state', snapshot),
+
   // ── NDI ──────────────────────────────────────────────────
   ndiAvailable:       ()        => ipcRenderer.invoke('ndi-available'),
   ndiFindSources:     ()        => ipcRenderer.invoke('ndi-find-sources'),
