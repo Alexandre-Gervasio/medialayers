@@ -9,6 +9,10 @@
     "type": "git",
     "url": "git+https://github.com/Alexandre-Gervasio/medialayers.git"
   },
+  "engines": {
+    "node": ">=18",
+    "npm": ">=9"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -25,7 +29,6 @@
   "dependencies": {
     "electron-updater": "^6.6.2",
     "express": "^5.2.1",
-    "golden-layout": "^2.6.0",
     "socket.io": "^4.8.3"
   },
   "optionalDependencies": {
