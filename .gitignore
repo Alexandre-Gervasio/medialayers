@@ -29,6 +29,7 @@ pnpm-debug.log*
 
 # Bundled binaries
 resources/*.exe
+src/ndi/ndi_bridge
 
 # OS and editor files
 .DS_Store
